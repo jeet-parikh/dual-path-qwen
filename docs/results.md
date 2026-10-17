@@ -282,3 +282,18 @@ Takeaways:
 - **DAgger helps the shallowest executor most** (+15 points at layer 4, push 30 → 50%), even though the recovery data was collected by the layer-16 policy. Layers 16 and 28 are unchanged within noise (±9 points at 30 episodes).
 - Offline test accuracy fell (77 → 69%) because the test split now contains hard drifted states. Not comparable to earlier offline numbers.
 - **The fast head's confidence predicts its errors** (push, layer 16): steps with top prob < 0.4 (5% of steps) disagree with the expert 96% of the time vs. 68% otherwise; < 0.5 (14% of steps): 92% vs. 65%. So confidence is a usable router signal.
+
+## 2026-10-18 — Planner in the loop: periodic planning vs. confidence router (push, layer 16, DAgger heads)
+
+`rollout.py --subtask planner --heads-dir outputs/heads/Qwen3-1.7B-subtask-d1 --layers 16 --tasks push-v3 --episodes 10` with `--plan-every 25` or `--router-threshold 0.4 --cooldown 10`. The planner is the same Qwen3-1.7B (full depth, thinking), called unbatched (~7–10 s per call).
+
+| subtask source | success | planner calls / episode | planner answers correct | planner time / episode |
+|---|---|---|---|---|
+| oracle (reference, 30 episodes) | 16/30 (53%) | — | — | — |
+| planner every 25 steps | 5/10 | 12.9 (5.8 in successful episodes) | 87% | 96 s |
+| planner when top prob < 0.4 | **0/10** | 5.8 | 86% | 41 s |
+
+Takeaways:
+- **Periodic planning works about as well as the oracle subtask** (5/10 vs. 53%), with ~6 planner calls in successful episodes.
+- **The confidence router fails, and the failure is instructive.** The planner correctly switches to "lower onto the puck" around step 30, but then the fast head stays confident (~0.85) while executing that stale subtask, so the router never re-plans and the robot hovers for the rest of the episode. **Confidence catches action uncertainty, not plan staleness.**
+- Motivates a learned router that detects staleness: a small classifier on the fast path's own layer-k features predicting "the subtask in my prompt no longer fits", at no extra inference cost.
