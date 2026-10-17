@@ -7,6 +7,9 @@ head's top probability, and whether it matched the expert's class at that same s
 
 With --subtask oracle, the prompt includes the expert's current stage (an upper bound for a planner);
 heads are then loaded from outputs/heads/<model>-subtask.
+With --subtask planner, the SAME Qwen model (full depth, thinking mode) decides the subtask: at the
+start, every --plan-every steps, and/or whenever the fast head's top probability drops below
+--router-threshold (with at least --cooldown steps between calls).
 
 Usage: python src/rollout.py [--model Qwen/Qwen3-1.7B] [--layers 4 16 28] [--head mlp] [--episodes 20] [--subtask oracle]
 Needs a GPU. Episode i uses env seed (seed + i), default 10000+, so layouts never overlap with
@@ -24,6 +27,7 @@ import torch
 
 from common import (TASKS, class_to_continuous, continuous_to_class, episode_env, expert_subtask, get_expert,
                     obs_to_prompt)
+from planner import SUBTASKS, plan
 from qwen import fast_features, load_qwen
 from train_heads import make_head
 
@@ -49,6 +53,35 @@ def fast_policy(model, tok, head, k):
     return policy
 
 
+class PlannerSubtask:
+    """Stateful subtask source for one episode: asks the full model (thinking) when needed."""
+
+    def __init__(self, model, tok, every=0, threshold=None, cooldown=5, max_new_tokens=1536):
+        self.model, self.tok = model, tok
+        self.every, self.threshold, self.cooldown, self.max_new = every, threshold, cooldown, max_new_tokens
+        self.current, self.t, self.last_call, self.last_conf = None, 0, -10**9, 1.0
+        self.calls, self.seconds, self.log = 0, 0.0, []
+
+    def observe(self, probs):
+        self.last_conf = float(probs.max())
+
+    def __call__(self, task, obs):
+        due = self.current is None or (self.every and self.t - self.last_call >= self.every)
+        unsure = (self.threshold is not None and self.last_conf < self.threshold
+                  and self.t - self.last_call >= self.cooldown)
+        if due or unsure:
+            start = time.perf_counter()
+            answer = plan(self.model, self.tok, task, [obs], True, self.max_new)[0][0]
+            self.seconds += time.perf_counter() - start
+            self.calls += 1
+            self.last_call = self.t
+            truth = expert_subtask(task, obs)
+            self.log.append({"step": self.t, "answer": answer, "truth": truth, "trigger": "due" if due else "unsure"})
+            self.current = answer or self.current or SUBTASKS[task][0]
+        self.t += 1
+        return self.current
+
+
 def run_episode(task, seed, policy, expert, max_steps, subtask_fn=None):
     """Run one episode (layout given by seed) with `policy`. Returns episode stats and per-step logs.
 
@@ -64,6 +97,8 @@ def run_episode(task, seed, policy, expert, max_steps, subtask_fn=None):
         cls, probs = policy(prompt)
         torch.cuda.synchronize()
         ms = (time.perf_counter() - start) * 1000
+        if hasattr(subtask_fn, "observe"):
+            subtask_fn.observe(probs)
         expert_cls = continuous_to_class(expert.get_action(obs))
         steps.append({"step": t, "class": cls, "expert_class": expert_cls, "top_prob": float(probs.max()), "ms": ms})
         obs, _, terminated, truncated, info = env.step(class_to_continuous(cls))
@@ -73,7 +108,13 @@ def run_episode(task, seed, policy, expert, max_steps, subtask_fn=None):
         if terminated or truncated:
             break
     env.close()
+    planner = {}
+    if isinstance(subtask_fn, PlannerSubtask):
+        planner = {"planner_calls": subtask_fn.calls, "planner_seconds": subtask_fn.seconds,
+                   "planner_accuracy": float(np.mean([c["answer"] == c["truth"] for c in subtask_fn.log])),
+                   "planner_log": subtask_fn.log}
     return {
+        **planner,
         "success": success,
         "steps": len(steps),
         "ms": float(np.mean([s["ms"] for s in steps])),
@@ -92,13 +133,17 @@ def main():
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--seed", type=int, default=10000)
     parser.add_argument("--max-steps", type=int, default=500)
-    parser.add_argument("--subtask", default="none", choices=["none", "oracle"])
+    parser.add_argument("--subtask", default="none", choices=["none", "oracle", "planner"])
+    parser.add_argument("--plan-every", type=int, default=0, help="planner call every N steps (0 = off)")
+    parser.add_argument("--router-threshold", type=float, default=None, help="call planner if top prob < this")
+    parser.add_argument("--cooldown", type=int, default=5)
     parser.add_argument("--out", default=None, help="default: outputs/rollouts/<model>[-subtask]")
     args = parser.parse_args()
     short = args.model.split("/")[-1]
-    heads_dir = os.path.join("outputs/heads", short + ("-subtask" if args.subtask == "oracle" else ""))
-    subtask_fn = expert_subtask if args.subtask == "oracle" else None
-    args.out = args.out or os.path.join("outputs/rollouts", short + ("-subtask" if args.subtask == "oracle" else ""))
+    uses_subtask = args.subtask != "none"
+    heads_dir = os.path.join("outputs/heads", short + ("-subtask" if uses_subtask else ""))
+    tag = {"none": "", "oracle": "-subtask", "planner": f"-planner-every{args.plan_every}-thr{args.router_threshold}"}
+    args.out = args.out or os.path.join("outputs/rollouts", short + tag[args.subtask])
     os.makedirs(args.out, exist_ok=True)
 
     tok, model = load_qwen(args.model)
@@ -109,8 +154,13 @@ def main():
         policy = fast_policy(model, tok, head, k)
         for task in args.tasks:
             expert = get_expert(task)  # same seeds for every layer -> same layouts
-            episodes = [run_episode(task, args.seed + i, policy, expert, args.max_steps, subtask_fn)
-                        for i in range(args.episodes)]
+            episodes = []
+            for i in range(args.episodes):
+                if args.subtask == "planner":
+                    subtask_fn = PlannerSubtask(model, tok, args.plan_every, args.router_threshold, args.cooldown)
+                else:
+                    subtask_fn = expert_subtask if args.subtask == "oracle" else None
+                episodes.append(run_episode(task, args.seed + i, policy, expert, args.max_steps, subtask_fn))
             row = {
                 "layer": k, "task": task, "head": args.head,
                 "success": float(np.mean([e["success"] for e in episodes])),
@@ -119,13 +169,19 @@ def main():
                 "expert_agreement": float(np.mean([e["expert_agreement"] for e in episodes])),
                 "top_prob": float(np.mean([e["top_prob"] for e in episodes])),
             }
+            if args.subtask == "planner":
+                row["planner_calls"] = float(np.mean([e["planner_calls"] for e in episodes]))
+                row["planner_seconds"] = float(np.mean([e["planner_seconds"] for e in episodes]))
+                row["planner_accuracy"] = float(np.mean([e["planner_accuracy"] for e in episodes]))
             summary.append(row)
             with open(os.path.join(args.out, f"{args.head}_layer{k}_{task}.jsonl"), "w") as f:
                 for e in episodes:
                     f.write(json.dumps(e) + "\n")
             n_ok = sum(e["success"] for e in episodes)
             print(f"{k:>5}  {task:<14}{f'{n_ok}/{args.episodes}':>9}{row['steps']:>7.0f}{row['ms']:>8.2f}"
-                  f"{row['expert_agreement']:>7.0%}{row['top_prob']:>6.2f}")
+                  f"{row['expert_agreement']:>7.0%}{row['top_prob']:>6.2f}"
+                  + (f"  planner: {row['planner_calls']:.1f} calls, {row['planner_seconds']:.0f}s, "
+                     f"{row['planner_accuracy']:.0%} right" if args.subtask == "planner" else ""))
 
     with open(os.path.join(args.out, f"summary_{args.head}.json"), "w") as f:
         json.dump({"args": vars(args), "results": summary}, f, indent=2)
