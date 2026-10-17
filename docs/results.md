@@ -297,3 +297,14 @@ Takeaways:
 - **Periodic planning works about as well as the oracle subtask** (5/10 vs. 53%), with ~6 planner calls in successful episodes.
 - **The confidence router fails, and the failure is instructive.** The planner correctly switches to "lower onto the puck" around step 30, but then the fast head stays confident (~0.85) while executing that stale subtask, so the router never re-plans and the robot hovers for the rest of the episode. **Confidence catches action uncertainty, not plan staleness.**
 - Motivates a learned router that detects staleness: a small classifier on the fast path's own layer-k features predicting "the subtask in my prompt no longer fits", at no extra inference cost.
+
+## 2026-10-18 — Learned staleness router (offline)
+
+`python src/stale_router.py` (Qwen3-1.7B; 40k push/pick-place states from dataset v2 + DAgger, each paired with its true subtask (fresh) and a random other subtask of the same task (stale) → 80k prompts; small MLP on the fast path's own layer-k features; split by episode)
+
+| layer | test accuracy | stale prompts caught | false alarms on fresh prompts |
+|---|---|---|---|
+| 4 | 92.5% | 92.2% | 7.1% |
+| 16 | 94.7% | 93.3% | 3.9% |
+
+Takeaway: the fast path's own features already encode whether its subtask fits the state. A tiny probe detects stale plans with ~95% accuracy at zero extra inference cost (the features are computed anyway). Contrast: the full model asked directly is at chance on the related subtask question and needs ~10 s of thinking to reach ~90%. So the cheap probe is the trigger, and the expensive planner fixes the plan.
