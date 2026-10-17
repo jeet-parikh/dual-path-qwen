@@ -51,3 +51,16 @@ Takeaways:
 - Discretized expert fails 6/200 pick-place episodes (plain expert 200/200), so the pick-place ceiling is ~97%. The 30-episode check missed this. Failed episodes are dropped from the data.
 - Reach is dominated by one class (32 = +y only, 66%), so its majority baseline is high. Compare per-task accuracy to per-task majority baselines.
 - Push spends half its steps in "lower onto the puck" (zig-zagging from fixed-size moves).
+
+## 2026-10-18 — Hidden-state extraction
+
+`python src/extract_hidden.py --model Qwen/Qwen3-{0.6B,1.7B}` (interactive on gpu_devel, batch 128, bf16) → `outputs/hidden/<model>/`
+
+| model | hidden size | rows | layers | size | time |
+|---|---|---|---|---|---|
+| Qwen3-0.6B | 1024 | 48,222 | 4–28 (7) | 0.69 GB | 30 s |
+| Qwen3-1.7B | 2048 | 48,222 | 4–28 (7) | 1.38 GB | 57 s |
+
+Notes:
+- Prompt length is fixed per task (reach 77, push 80, pick-place 84 tokens), so per-task batches need no padding.
+- Batched vs. single-prompt features differ by ~1% (relative L2) from bf16 rounding with different batch sizes, even without padding. Harmless noise for the heads.
