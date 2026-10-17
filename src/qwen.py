@@ -37,6 +37,28 @@ def layer_features(model, tok, prompts, layers=DEFAULT_LAYERS):
     return {k: (hs[k] if k == n else model.model.norm(hs[k]))[:, -1, :].float() for k in layers}
 
 
+def layer_features_bucketed(model, tok, prompts, layers=DEFAULT_LAYERS, batch_size=128):
+    """layer_features for prompts of varying length: batches hold equal-length prompts (no padding).
+
+    Returns {k: tensor [len(prompts), hidden]} in the original prompt order.
+    """
+    lengths = [len(ids) for ids in tok(prompts).input_ids]
+    order = sorted(range(len(prompts)), key=lambda i: lengths[i])
+    out = {k: [None] * len(prompts) for k in layers}
+    i = 0
+    while i < len(order):
+        j = i
+        while j < len(order) and j - i < batch_size and lengths[order[j]] == lengths[order[i]]:
+            j += 1
+        idx = order[i:j]
+        feats = layer_features(model, tok, [prompts[n] for n in idx], layers)
+        for k in layers:
+            for row, n in enumerate(idx):
+                out[k][n] = feats[k][row]
+        i = j
+    return {k: torch.stack(v) for k, v in out.items()}
+
+
 @contextmanager
 def first_k_layers(model, k):
     """Temporarily cut the model down to its first k layers (the fast path)."""

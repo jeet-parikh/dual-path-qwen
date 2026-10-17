@@ -74,6 +74,29 @@ Action:
 
 Current dataset: v2, `python src/data_gen.py` (500 episodes per task, one unique layout each). v1 (200 episodes, only ~49 layouts per task) is superseded. See `docs/results.md`.
 
+## 3a. Current plan (2026-10-18): back to the proposal
+
+After exploring language-specified goals (Section 3b, a side branch), we returned to the proposal's structure: **one frozen Qwen as both planner (full depth) and executor (first k layers + head)**, two routers compared, early-exit and split-model baselines. Lessons carried over:
+- **Numbers go to the head directly.** The LLM can't do coordinate math in its hidden states (Section 3b results), so the fast-path head gets layer-k features ⊕ raw state numbers.
+- **The fast path is conditioned on the planner's subtask text** (the `subtask` field we already record), so the planner has a measurable effect on execution.
+- **Expert steering:** experts reach arbitrary targets via the goal slot (feasibility sweep), so chained multi-step tasks give the planner real work.
+
+Order: fast path v2 (subtask text + numbers; offline, then closed loop with oracle subtasks) → planner loop with full Qwen (decompose, check progress every N steps) → routers (confidence vs. learned) → baselines (entropy early exit, 0.6B + 1.7B/8B split, raw MLP) → resume-from-k + FLOPs.
+
+## 3b. Side branch (2026-10-18, explored, not pursued): language-specified goals
+
+**Why:** on numbers-only prompts, an MLP on the same numbers beats the Qwen fast path (76 vs. 72%), because nothing in the task needs language. Prior work already covers early exit for robot models (DeeR-VLA, NeurIPS 2024) and fast+slow inside one model (FiS-VLA, UniFS), all as end-to-end-trained VLAs.
+
+**Our angle:** (1) a *frozen*, general-purpose text LLM with plug-in heads, no robot fine-tuning; (2) a fast controller that *generalizes through language* to unseen instructions; (3) one model with shared compute, where the full model resolves hard instructions (planner) and the fast path reuses its computation.
+
+**Task:** the goal's coordinates leave the prompt. Three colored text-only markers are listed in shuffled order, and an instruction describes the target relative to them ("move 10 cm left of the red marker", "go halfway between the red and green markers"). Our code computes the target, overwrites `obs[36:39]` every step, and runs the unchanged expert. Custom success: within 5 cm. Frame: left = -x, behind = +y. Splits by instruction: train / test_iid / test_paraphrase (held-out sentence frames, direction phrases, number words) / test_compose (held-out combinations). All of this is in `src/lang.py`.
+
+**Key comparison:** Qwen layer-k features (± raw numbers) vs. MiniLM + numbers (split-model baseline) vs. bag-of-words + numbers on held-out instructions. Primary metric: step-0 target probe (fraction of targets predicted within 5 cm).
+
+**Milestones:** M1a no-physics probe go/no-go + expert feasibility sweep → M1b full reach pipeline → M2 closed loop + push → M3 slow path resolves reasoning instructions → M4 shared prefix KV cache. Full plan: `~/.claude/plans/yeah-it-sounds-good-snuggly-lightning.md`.
+
+The numbers-only results (dataset v2, heads v2, rollouts) stay as the "no language" reference.
+
 ## 4. Week 1 plan (MVP for the progress report)
 
 **Done means:** one command takes Meta-World states, routes them through a partial Qwen and a trained head, and drives the robot; plus a plot of action accuracy versus layer depth.

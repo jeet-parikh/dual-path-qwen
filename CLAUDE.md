@@ -15,7 +15,8 @@ Dual Path Qwen (CPSC 4880 final project, currently solo): a frozen Qwen's first 
 - Never commit data, hidden-state caches, model weights, checkpoints, or logs (see `.gitignore`).
 - Test on small subsets and small models (Qwen3-0.6B) before any full run.
 - Scripts run from the repo root with command-line arguments, not hard-coded paths. Large outputs go under `outputs/` (symlink to scratch). Repo layout: overview Section 7. Cluster reference (partitions, sbatch template, storage): `docs/cluster.md`.
-- All prompt formatting and action conversion go through `src/common.py`; change discretization settings only there.
+- All prompt formatting and action conversion go through `src/common.py` (language-goal prompts, markers, instructions, splits: `src/lang.py`); change discretization settings only in `common.py`.
+- Current direction: the proposal's planner + executor in one frozen model (overview Section 3a). Language-goal code (`lang.py`) is a side branch.
 - Train/test splits are always by episode, never by step.
 - Qwen is frozen; never fine-tune it.
 - Prefer the simplest approach that works (no packaging, frameworks, or extra structure unless needed).

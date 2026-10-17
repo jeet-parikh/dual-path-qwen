@@ -173,3 +173,38 @@ Takeaways:
 - Agreement with the expert in closed loop (4–54%) is far below offline accuracy (~70%), yet success is often decent. Two effects: (1) covariate shift, as the robot drifts into states the expert never visits and errors compound, so failing episodes contribute hundreds of low-agreement steps; (2) many disagreements are harmless (e.g. moving on two axes vs. one).
 - Confidence stays high (0.75–0.95) even when the policy is wrong. The top probability alone may be a weak router signal; check per-step calibration when building the router.
 - Note: 20 episodes per cell gives roughly ±10–20 points of noise on each success rate.
+
+## 2026-10-18 — M1a: language-goal target probe (go/no-go) → NO-GO as designed
+
+`python src/lang_probe.py` (no simulator; 6,500 step-0 reach scenes: 4,000 train / 500 val / 500 test_iid / 1,000 test_paraphrase / 500 test_compose; MLP regression probe to target xy, best-val epoch). Metric: fraction of targets predicted within 5 cm. Qwen rows show the layer with the best paraphrase score, an optimistic choice for Qwen.
+
+| representation | iid | paraphrase | compose | paraphrase mean err (cm) |
+|---|---|---|---|---|
+| numbers only (no language) | 14% | 14% | 17% | 13.0 |
+| bag-of-words + numbers | 93% | **67%** | **65%** | 4.6 |
+| MiniLM + numbers | **96%** | 13% | 57% | 11.6 |
+| Qwen3-0.6B full prompt (best L4) | 16% | 7% | 19% | 18.5 |
+| Qwen3-0.6B full prompt L20 + numbers | 59% | 20% | 46% | 10.8 |
+| Qwen3-0.6B instruction-only L8 + numbers | 90% | 25% | 57% | 9.6 |
+| Qwen3-1.7B full prompt (best L16) | 19% | 6% | 24% | 18.0 |
+| Qwen3-1.7B full prompt L20 + numbers | 36% | 17% | 32% | 12.4 |
+| Qwen3-1.7B instruction-only L4 + numbers | 91% | 18% | 61% | 11.2 |
+
+Instruction-only features *without* numbers: 7–8% everywhere, so there is no leak from workspace rejection sampling.
+
+Takeaways:
+- **Go criterion not met.** On held-out paraphrases, Qwen does not beat MiniLM by a clear margin (25 vs. 13% at best), and bag-of-words beats both (67%).
+- **Why bag-of-words wins:** the held-out paraphrases still contain the key words (colors, "left"/"right"), and a word-count model ignores unfamiliar frames. Dense embeddings (MiniLM, Qwen) shift on new sentence frames, and a probe trained on only 2–3 frames per family doesn't extrapolate. The test measured keyword overlap more than understanding.
+- **Qwen can't do the coordinate arithmetic in its hidden states.** Full-prompt features alone stay at 15–20% even on seen wording (vs. 90%+ when the numbers go to the probe directly). Putting the numbers into the LLM *hurts*: full prompt + numbers < instruction-only + numbers. Design rule: the LLM should handle language, and numbers should go straight to the head.
+- Qwen instruction features ≈ MiniLM on seen wording (90–91 vs. 96%).
+
+## 2026-10-18 — Expert feasibility with arbitrary (marker-defined) targets
+
+`python src/check_lang.py --episodes 300` (target overwritten into `obs[36:39]` each step; success = within 5 cm)
+
+| task | expert | discretized expert | mean steps (discretized) |
+|---|---|---|---|
+| reach-v3 | 300/300 | 300/300 | 30 |
+| push-v3 | 286/300 (95.3%) | **300/300** | 99 |
+
+All families and directions ≥ 93% for the plain expert, 100% discretized. Takeaway: the scripted experts can be steered to arbitrary table targets by overwriting the goal slot, so chained multi-step tasks (e.g. push the puck to a spot, then reach a marker) are feasible with free expert data. The discretized push expert was even more reliable than the plain one here.

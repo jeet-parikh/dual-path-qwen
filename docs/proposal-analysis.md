@@ -64,6 +64,12 @@ Not yet locked into the overview. Move each into `project-overview.md` once agre
 - [x] A dated results log, `docs/results.md`: command, settings, and number for every run. **Done.**
 - [ ] Optional: LoRA ablation for Q2.
 
+## 4b. Novelty check and pivot (2026-10-18)
+
+Prior work found in a quick search: [DeeR-VLA](https://arxiv.org/abs/2411.02359) (NeurIPS 2024; multi-exit MLLM for robot control, 5–6× compute savings on CALVIN), [FiS-VLA](https://arxiv.org/pdf/2506.01953) (VLM's final blocks repurposed as a fast controller, trained jointly), and UniFS (cited in the proposal). All are end-to-end trained VLAs, so "early exit for control" and "fast+slow in one model" are not new by themselves.
+
+R1 materialized: on numbers-only prompts an MLP beats Qwen. Pivot to language-specified goals (overview Section 3b). Novelty claim to test: frozen LLM early layers understand *unseen* instructions better than a dedicated small text encoder, at a fraction of full-model cost, with the full model as planner sharing compute. The decisive baseline is a small text encoder (MiniLM) + raw numbers, i.e. the proposal's split-model baseline.
+
 ## 5. Reference baselines for every result
 
 A number means little without its floor and ceiling:
