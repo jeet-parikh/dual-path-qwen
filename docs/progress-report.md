@@ -17,7 +17,7 @@ One frozen, general-purpose LLM (Qwen3) acts as both a **fast executor** (first 
 3. **The planner's output helps the executor.** Adding the subtask to the fast path's prompt raises action accuracy by 5 points (push: +9).
 4. **DAgger closes the gap for the cheapest executor.** Recovery data lifts layer-4 success from 48% to 63% (push 30 → 50%) at 2.1 ms per decision.
 5. **Fast-head confidence predicts errors.** Below 0.4 top probability, the head is wrong 96% of the time vs. 68% otherwise, so confidence works as a router signal.
-6. *(pending)* Planner every N steps vs. planner on low confidence: success vs. planner calls.
+6. **Confidence routers miss stale plans; a learned staleness router fixes it.** In the loop, triggering the planner on low fast-head confidence fails completely on push (0/10): after a correct switch to "lower onto the puck", the executor stays *confident* while following the outdated subtask. A tiny probe on the fast path's own layer-16 features detects stale subtasks with ~95% accuracy offline (93% caught, 4% false alarms) at zero extra inference cost. In the loop it restores success (4/10, vs. 5/10 for planning every 25 steps) with ~25% fewer planner calls. *(Larger runs in progress.)*
 
 ## Honest negatives (also findings)
 
@@ -27,7 +27,7 @@ One frozen, general-purpose LLM (Qwen3) acts as both a **fast executor** (first 
 
 ## Next
 
-- Learned router vs. confidence router (proposal commitment).
+- Router comparison at scale (more episodes; hybrid staleness + periodic fallback).
 - Baselines: entropy-based early exit; split models (Qwen3-0.6B executor + 1.7B/8B planner).
 - Resume-from-layer-k escalation; FLOPs accounting.
 - Chained multi-step tasks so the planner matters more; scale to Qwen3-8B.
