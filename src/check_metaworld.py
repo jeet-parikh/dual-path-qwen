@@ -12,18 +12,17 @@ import warnings
 
 import numpy as np
 
-from common import TASKS, discretize, get_expert, make_env
+from common import TASKS, discretize, episode_env, get_expert
 
 warnings.filterwarnings("ignore")  # Gymnasium/Meta-World warnings are harmless noise here
 
 
 def run_episodes(task, episodes, seed, squash):
     """Run episodes with the expert (optionally discretized). Returns (successes, steps per episode)."""
-    env = make_env(task, seed=seed)  # same seed -> same sequence of object/goal positions
     expert = get_expert(task)
     successes, steps = 0, []
-    for _ in range(episodes):
-        obs, _ = env.reset()
+    for ep in range(episodes):
+        env, obs = episode_env(task, seed + ep)  # one unique layout per episode
         for t in range(1, 501):
             action = expert.get_action(obs)
             if squash:
@@ -35,7 +34,7 @@ def run_episodes(task, episodes, seed, squash):
             if terminated or truncated:
                 break
         steps.append(t)
-    env.close()
+        env.close()
     return successes, steps
 
 

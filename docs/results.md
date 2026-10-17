@@ -37,6 +37,8 @@ Takeaway: nearly identical to 0.6B despite ~3× the parameters. At batch 1 on th
 
 ## 2026-10-18 — Dataset v1
 
+> **SUPERSEDED (layout leak).** Meta-World MT1 pre-samples only 50 layouts per seed and cycles through them on reset, so these 200 episodes per task were ~49 layouts repeated ~4×. See "Layout leak" below.
+
 `python src/data_gen.py --episodes 200 --seed 0` (~25 s on CPU) → `outputs/data/` (30 MB)
 
 | task | episodes kept | steps | steps/episode | classes used | most common class |
@@ -65,7 +67,9 @@ Notes:
 - Prompt length is fixed per task (reach 77, push 80, pick-place 84 tokens), so per-task batches need no padding.
 - Batched vs. single-prompt features differ by ~1% (relative L2) from bf16 rounding with different batch sizes, even without padding. Harmless noise for the heads.
 
-## 2026-10-18 — Action heads: accuracy vs. layer (the main week-1 result)
+## 2026-10-18 — Action heads v1 (INVALID: layout leak)
+
+> **INVALID.** Trained on dataset v1, where train and test episodes shared the same ~49 layouts per task (near-identical deterministic trajectories), so test accuracy is inflated by memorization. First closed-loop test on new layouts failed (reach 0/2, ~0% agreement with the expert). Kept for the record; superseded by v2 below.
 
 `python src/train_heads.py --model Qwen3-{0.6B,1.7B}` then `python src/plot_heads.py` → `figures/`
 Split by episode within each task: 33,686 train / 4,793 val / 9,743 test steps. One shared head for all tasks. 200 epochs (AdamW, lr 1e-3), best-val epoch kept. Baseline MLPs: 1000 epochs.
@@ -98,3 +102,74 @@ Takeaways:
 - Qwen features beat an MLP reading the same rounded numbers (91 vs. 87%), with the caveat that this baseline was still slowly improving.
 - Hardest subtask: pick-place "lower onto the puck" (78–82%, ceiling 87%).
 - Training budget mattered: 40 epochs understated linear heads by up to 5 points and the state baseline by 15. Undertrained baselines would have flattered Qwen.
+
+## 2026-10-18 — Layout leak found
+
+First rollout (`src/rollout.py`, layer 4, seed 1000) failed on reach (0/2) with 0% expert agreement while the head was 97% confident, despite 96% offline reach accuracy. Live and cached features matched (<1% diff) and predicted correctly on training prompts, so the head was fine. Cause: **Meta-World MT1 envs pre-sample 50 object/goal layouts per seed and cycle through them on `reset()`.** Dataset v1 had only 48–49 distinct layouts per task, so the episode split leaked layouts into test, and seed 1000 meant all-new layouts.
+
+Fix: `episode_env(task, seed)` in `common.py` creates a fresh env per episode (one unique layout per seed). Data uses seeds 0..N-1; rollouts use 10000+. Creating an env costs ~0.4 s.
+
+Expert re-check on unique layouts (`python src/check_metaworld.py --episodes 200`):
+
+| task | expert | discretized expert | mean steps (expert → discretized) |
+|---|---|---|---|
+| reach-v3 | 200/200 | 200/200 | 48.4 → 55.6 |
+| push-v3 | 200/200 | 200/200 | 61.4 → 114.5 |
+| pick-place-v3 | 200/200 | 193/200 | 53.3 → 88.4 |
+
+## 2026-10-18 — Dataset v2 + action heads v2 (valid)
+
+Data: `python src/data_gen.py` (500 episodes per task, one unique layout each; ~10 min because each episode builds a fresh env). Kept 500 / 500 / 472 episodes; 119,405 steps (reach 27,773, push 56,902, pick-place 34,730). Features re-extracted (0.6B 1.71 GB in 74 s; 1.7B 3.42 GB in 141 s). Heads: same settings as v1. Split 83,844 train / 12,040 val / 23,521 test steps.
+
+Test accuracy (%):
+
+| layer | 0.6B linear | 0.6B MLP | 1.7B linear | 1.7B MLP |
+|---|---|---|---|---|
+| 4 | 59.6 | 63.1 | 63.7 | 68.6 |
+| 8 | 66.8 | 69.5 | 68.2 | 71.5 |
+| 12 | 68.9 | 71.3 | 70.1 | 71.1 |
+| 16 | 68.9 | 71.9 | 71.4 | 72.4 |
+| 20 | 68.9 | 71.2 | 70.9 | 71.6 |
+| 24 | 67.5 | 70.0 | 69.1 | 70.4 |
+| 28 | 66.2 | 68.3 | 68.6 | 70.2 |
+
+| baseline | test acc |
+|---|---|
+| always most common class | 15.3 |
+| most common class per task | 31.2 |
+| MLP on the prompt's rounded numbers + task id | 76.3 |
+| best possible from prompt text (oracle) | 94.6 |
+| MLP on full-precision state + task id | 96.7 |
+
+Takeaways:
+- On truly unseen layouts the best heads reach ~72% (layer 16), far above guessing (31%) but far below the prompt ceiling (94.6%).
+- Middle layers are still best. Early layers now lag more: 1.7B MLP layer 4 = 68.6% vs. 72.4% at 16; 0.6B layer 4 = 63.1%.
+- **Qwen features trail a plain MLP on the same rounded numbers (72 vs. 76%).** The v1 advantage was the leak. This is the "why an LLM?" risk materializing.
+- Large train/test gap (MLP train 80–90%, test ~70%): heads overfit to layouts. Candidates: more episodes, stronger regularization, mean-pooled features.
+- Per task (1.7B MLP, best layer): reach ~91%, push ~65%, pick-place ~69%. Weakest stage: "lower onto the puck" (41–57%, ceiling 88–92%). It needs xy alignment within 0.02, while the prompt resolves 0.01, so it is where rounding hurts most.
+
+## 2026-10-18 — First closed-loop rollouts (end-to-end MVP)
+
+`python src/rollout.py --model Qwen/Qwen3-1.7B --layers 4 16 28 --episodes 20` (MLP heads from v2; env seeds 10000–10019, unseen layouts; same layouts for every layer). ms/decision = tokenize + first-k layers + head, batch 1. "agree" = fraction of visited states where the head's class equals the expert's class at that state.
+
+| layer | task | success | mean steps | ms/decision | agree | mean top prob |
+|---|---|---|---|---|---|---|
+| 4 | reach | 19/20 | 77 | 2.15 | 48% | 0.94 |
+| 4 | push | 4/20 | 456 | 2.03 | 4% | 0.87 |
+| 4 | pick-place | 10/20 | 303 | 2.04 | 28% | 0.76 |
+| 16 | reach | **20/20** | 56 | 5.74 | 54% | 0.95 |
+| 16 | push | **11/20** | 287 | 5.72 | 27% | 0.91 |
+| 16 | pick-place | 12/20 | 243 | 5.74 | 39% | 0.87 |
+| 28 | reach | 16/20 | 145 | 9.39 | 40% | 0.95 |
+| 28 | push | 6/20 | 402 | 9.42 | 15% | 0.84 |
+| 28 | pick-place | **15/20** | 192 | 9.40 | 30% | 0.75 |
+
+Totals: layer 4 = 33/60 (55%), layer 16 = 43/60 (72%), layer 28 = 37/60 (62%). Reference ceiling (discretized expert): 100% / 100% / ~97%.
+
+Takeaways:
+- **The full loop works.** A frozen Qwen + small head drives the robot to success on unseen layouts, at 2–9 ms per decision.
+- Layer 16 (57% of the model's time) beats the full model (28) overall, matching the offline trend. Layer 4 runs at 23% of full-depth time and still solves reach 19/20.
+- Push is hardest (4–11/20), consistent with its weak offline "lower onto the puck" accuracy.
+- Agreement with the expert in closed loop (4–54%) is far below offline accuracy (~70%), yet success is often decent. Two effects: (1) covariate shift, as the robot drifts into states the expert never visits and errors compound, so failing episodes contribute hundreds of low-agreement steps; (2) many disagreements are harmless (e.g. moving on two axes vs. one).
+- Confidence stays high (0.75–0.95) even when the policy is wrong. The top probability alone may be a weak router signal; check per-step calibration when building the router.
+- Note: 20 episodes per cell gives roughly ±10–20 points of noise on each success rate.

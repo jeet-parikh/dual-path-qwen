@@ -28,8 +28,20 @@ TASKS = {
 
 
 def make_env(task, seed=None):
-    """Create a single Meta-World MT1 env. Each reset() samples new object/goal positions."""
+    """Create a single Meta-World MT1 env.
+
+    Careful: MT1 pre-samples only 50 object/goal layouts per seed and cycles through them on
+    reset(). For a unique layout per episode, create a new env with its own seed each episode
+    (see episode_env).
+    """
     return gym.make("Meta-World/MT1", env_name=task, seed=seed)
+
+
+def episode_env(task, seed):
+    """Fresh env whose first reset() gives the layout for this seed. Returns (env, first obs)."""
+    env = make_env(task, seed=seed)
+    obs, _ = env.reset()
+    return env, obs
 
 
 def get_expert(task):

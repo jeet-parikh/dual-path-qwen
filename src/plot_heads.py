@@ -45,6 +45,13 @@ def load(model):
     return r
 
 
+def lower_limit(results, baselines, get_line, get_ref):
+    """Y-axis floor: 5 points below the lowest line or reference, rounded down to a multiple of 5."""
+    vals = [100 * get_line(r["layers"][k][h]) for r in results.values() for k in r["layers"] for h in r["layers"][k]]
+    vals += [100 * get_ref(baselines[key]) for key, _ in REFERENCES if key in baselines]
+    return 5 * int((min(vals) - 5) // 5)
+
+
 def plot_lines(ax, results, get, label_models=True):
     """Draw accuracy-vs-layer lines for every model x head. get(entry) -> accuracy in [0, 1]."""
     for color, (model, r) in zip(MODEL_COLORS, results.items()):
@@ -73,10 +80,10 @@ def fig_accuracy_vs_layer(results, out):
     base = next(iter(results.values()))["baselines"]
     plot_lines(ax, results, lambda e: e["overall"])
     plot_references(ax, base, lambda b: b["overall"])
-    ax.set_ylim(75, 100)
+    ax.set_ylim(lower_limit(results, base, lambda e: e["overall"], lambda b: b["overall"]), 100)
     ax.set_xlabel("Qwen layers used (of 28)")
     ax.set_ylabel("Test accuracy, 54 action classes (%)")
-    ax.set_title("Early layers already pick the expert's action", loc="left", fontsize=12, fontweight="bold",
+    ax.set_title("Action accuracy vs. Qwen depth", loc="left", fontsize=12, fontweight="bold",
                  pad=22)
     ax.text(0, 1.02, f"Held-out episodes, all three tasks. Off-scale: always guessing the most common class "
             f"{100 * base['majority']['overall']:.0f}%, per task {100 * base['task_majority']['overall']:.0f}%.",
@@ -99,7 +106,7 @@ def fig_accuracy_by_task(results, out):
                 fontsize=8.5, color=INK_2)
         ax.set_title(TASK_NAMES[task], loc="left", fontweight="bold")
         ax.set_xlabel("Qwen layers used")
-    axes[0].set_ylim(70, 100)
+    axes[0].set_ylim(min(lower_limit(results, {}, lambda e, t=t: e["per_task"][t], None) for t in tasks), 100)
     axes[0].set_ylabel("Test accuracy (%)")
     fig.legend(loc="lower center", ncol=4, fontsize=9, bbox_to_anchor=(0.5, -0.02))
     fig.suptitle("Accuracy vs. layer, per task",
@@ -118,9 +125,11 @@ def fig_subtask_heatmap(r, head, out):
     cols = [str(k) for k in layers] + ["prompt\nceiling"]
 
     fig, ax = plt.subplots(figsize=(8.5, 4.6))
-    ax.imshow(data, cmap=BLUES, vmin=75, vmax=100, aspect="auto")
+    vmin = 10 * int(data.min() // 10)
+    ax.imshow(data, cmap=BLUES, vmin=vmin, vmax=100, aspect="auto")
     for (i, j), v in np.ndenumerate(data):
-        ax.text(j, i, f"{v:.0f}", ha="center", va="center", fontsize=8.5, color=SURFACE if v >= 90 else INK)
+        dark = (v - vmin) / (100 - vmin) >= 0.6
+        ax.text(j, i, f"{v:.0f}", ha="center", va="center", fontsize=8.5, color=SURFACE if dark else INK)
     ax.axvline(len(layers) - 0.5, color=SURFACE, lw=4)  # gap before the ceiling column
     ax.set_xticks(range(len(cols)), cols)
     ax.set_yticks(range(len(rows)), [s.replace("-v3 | ", ": ") for s in rows])

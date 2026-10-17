@@ -3,8 +3,9 @@
 At each step we record the expert's action as the label, but the robot executes the
 discretized version, so the recorded states are the ones a perfect 54-class policy visits.
 Only successful episodes are saved (a few discretized pick-place episodes get stuck).
+Episode i uses env seed (seed + i), so every episode has its own object/goal layout.
 
-Usage: python src/data_gen.py [--episodes 200] [--tasks reach-v3 ...] [--seed 0] [--out outputs/data]
+Usage: python src/data_gen.py [--episodes 500] [--tasks reach-v3 ...] [--seed 0] [--out outputs/data]
 """
 
 import argparse
@@ -17,9 +18,9 @@ from common import (
     TASKS,
     class_to_continuous,
     continuous_to_class,
+    episode_env,
     expert_subtask,
     get_expert,
-    make_env,
     obs_to_prompt,
 )
 
@@ -28,11 +29,10 @@ warnings.filterwarnings("ignore")
 
 def generate(task, episodes, seed, max_steps):
     """Yield (rows for one episode, success) for each episode."""
-    env = make_env(task, seed=seed)
     expert = get_expert(task)
     short = task.removesuffix("-v3")
     for ep in range(episodes):
-        obs, _ = env.reset()
+        env, obs = episode_env(task, seed + ep)
         rows, success = [], False
         for step in range(max_steps):
             action = expert.get_action(obs)
@@ -53,13 +53,13 @@ def generate(task, episodes, seed, max_steps):
                 break
             if terminated or truncated:
                 break
+        env.close()
         yield rows, success
-    env.close()
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=200)
+    parser.add_argument("--episodes", type=int, default=500)
     parser.add_argument("--tasks", nargs="+", default=list(TASKS))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-steps", type=int, default=500)

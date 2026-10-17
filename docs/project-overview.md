@@ -45,7 +45,7 @@ Final project for **CPSC 4880 (Advances in Frontier AI Models), Yale**. The prop
 | Class → continuous action | xyz = direction × `MOVE_SIZE`; gripper open → 0.0, closed → 1.0 (the experts use 0.0 for open and 0.6–1.0 for closed) |
 | Features | Last-token hidden state at layers 4, 8, 12, 16, 20, 24, 28, **with the model's final RMSNorm applied** (= what a model cut to k layers outputs; raw residuals have outlier values ~6500, normed < 100). Defined in `src/qwen.py`; verified identical between cached full-pass features and the live first-k-layers fast path |
 | Qwen | **Frozen.** Never fine-tuned. Hidden states are extracted once and cached; heads train on the cache |
-| Train/test split | **By episode, never by step** (neighboring steps are nearly identical, so a step split inflates accuracy) |
+| Train/test split | **By episode, never by step** (neighboring steps are nearly identical, so a step split inflates accuracy). **Every episode must have its own layout:** Meta-World MT1 pre-samples only 50 layouts per seed and cycles through them on `reset()`, so always use `episode_env(task, seed)` with a distinct seed per episode. Data: seeds 0..N-1; rollouts: 10000+ |
 
 **Prompt format** (produced by `obs_to_prompt` in `src/common.py`):
 
@@ -72,7 +72,7 @@ Action:
 - **The robot executes the discretized action during data generation**, so recorded states match what a perfect 54-class policy visits.
 - **Only successful episodes are saved.**
 
-Current dataset (`python src/data_gen.py --episodes 200 --seed 0`): 48,222 steps from 594 episodes. See `docs/results.md`.
+Current dataset: v2, `python src/data_gen.py` (500 episodes per task, one unique layout each). v1 (200 episodes, only ~49 layouts per task) is superseded. See `docs/results.md`.
 
 ## 4. Week 1 plan (MVP for the progress report)
 
@@ -82,7 +82,7 @@ Current dataset (`python src/data_gen.py --episodes 200 --seed 0`): 48,222 steps
 - **Day 2 — Generate data.** `src/data_gen.py`: ~200 expert episodes per task, saved in the data format above. Check the class distribution (some of the 54 classes will be rare or unused; that's fine but worth knowing).
 - **Day 3 — Extract hidden states.** `src/extract_hidden.py`: one forward pass of Qwen over every prompt with `output_hidden_states=True`, save last-token vectors for the chosen layers. Run via `sbatch`. A couple of GB at 1.7B. No training of Qwen. **Done 2026-10-18:** ran interactively instead (about 1 min per model on one GPU); features in `outputs/hidden/<model>/` (`layer<k>.npy` + `meta.npz`).
 - **Day 4 — Train heads, make the plot.** `src/train_heads.py`: one head per layer (logistic regression first, then a 2-layer MLP). Split by episode. Include a majority-class baseline. Plot test accuracy vs. layer. This is the centerpiece of the progress report. **Done 2026-10-18:** `src/train_heads.py` + `src/plot_heads.py` → `figures/`. One shared head for all tasks; split 70/10/20 by episode; 200 epochs, best-val epoch. Baselines: majority, per-task majority, MLP on prompt numbers, MLP on full-precision state, prompt-text oracle ceiling. Results in `docs/results.md`.
-- **Day 5 — Closed loop.** `src/rollout.py`: state → prompt → first k layers → head → action class → continuous action → environment. ~20 episodes per task; record success rate and ms per decision. Repeat with the full-depth head. Expect lower success than offline accuracy (covariate shift: small errors compound as the robot drifts into states the expert never visited). The goal this week is that the loop runs, not that it performs well.
+- **Day 5 — Closed loop.** `src/rollout.py`: state → prompt → first k layers → head → action class → continuous action → environment. ~20 episodes per task; record success rate and ms per decision. Repeat with the full-depth head. Expect lower success than offline accuracy (covariate shift: small errors compound as the robot drifts into states the expert never visited). The goal this week is that the loop runs, not that it performs well. **Done 2026-10-18:** `src/rollout.py`; 1.7B MLP heads succeed 55% / 72% / 62% of episodes at layers 4 / 16 / 28 (2.1 / 5.7 / 9.4 ms per decision). See `docs/results.md`.
 - **Day 6 — Simple router + buffer.** `src/router.py`: if the fast head's top probability is below a threshold, use the full-depth head. Log the fast/slow usage ratio. Rest of the day is buffer.
 - **Day 7 — Progress report.** Layer-vs-accuracy plot, closed-loop success and latency table, router usage ratio, what we learned, what's next.
 
