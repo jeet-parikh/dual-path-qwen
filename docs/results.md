@@ -308,3 +308,15 @@ Takeaways:
 | 16 | 94.7% | 93.3% | 3.9% |
 
 Takeaway: the fast path's own features already encode whether its subtask fits the state. A tiny probe detects stale plans with ~95% accuracy at zero extra inference cost (the features are computed anyway). Contrast: the full model asked directly is at chance on the related subtask question and needs ~10 s of thinking to reach ~90%. So the cheap probe is the trigger, and the expensive planner fixes the plan.
+
+## 2026-10-18 — Staleness router in the loop (push, layer 16, 10 episodes)
+
+`rollout.py --subtask planner --stale-router outputs/routers/Qwen3-1.7B/stale_layer16.pt --stale-threshold 0.8 --cooldown 10 ...` (same seeds as the runs above)
+
+| planner trigger | success | planner calls / episode (all / successful) | planner correct |
+|---|---|---|---|
+| every 25 steps | 5/10 | 12.9 / 5.8 | 87% |
+| fast-head confidence < 0.4 | 0/10 | 5.8 / – | 86% |
+| **staleness router > 0.8** | 4/10 | **9.8 / 4.0** | 92% |
+
+Takeaway: the learned staleness router fixes the confidence router's failure (0 → 4/10) and roughly matches periodic planning with ~25% fewer planner calls (~30% fewer in successful episodes). At 10 episodes the 5 vs. 4 difference is noise. The remaining failures are mostly executor failures (stuck hovering near the puck), not planning errors.

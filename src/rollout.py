@@ -8,8 +8,10 @@ head's top probability, and whether it matched the expert's class at that same s
 With --subtask oracle, the prompt includes the expert's current stage (an upper bound for a planner);
 heads are then loaded from outputs/heads/<model>-subtask.
 With --subtask planner, the SAME Qwen model (full depth, thinking mode) decides the subtask: at the
-start, every --plan-every steps, and/or whenever the fast head's top probability drops below
---router-threshold (with at least --cooldown steps between calls).
+start, every --plan-every steps, whenever the fast head's top probability drops below
+--router-threshold, and/or whenever the learned staleness router (--stale-router, reading the fast
+path's own layer-k features) says the current subtask is out of date with probability above
+--stale-threshold (with at least --cooldown steps between calls).
 
 Usage: python src/rollout.py [--model Qwen/Qwen3-1.7B] [--layers 4 16 28] [--head mlp] [--episodes 20] [--subtask oracle]
 Needs a GPU. Episode i uses env seed (seed + i), default 10000+, so layouts never overlap with
@@ -48,27 +50,45 @@ def fast_policy(model, tok, head, k):
     """Policy that runs the first k layers + head. policy(prompt) -> (class, probabilities)."""
     @torch.no_grad()
     def policy(prompt):
-        probs = head(fast_features(model, tok, [prompt], k))[0]
+        feats = fast_features(model, tok, [prompt], k)
+        policy.last_features = feats
+        probs = head(feats)[0]
         return int(probs.argmax()), probs.cpu().numpy()
     return policy
+
+
+def load_stale_router(path, device):
+    """Staleness router from stale_router.py: features [1, d] -> probability the subtask is stale."""
+    from stale_router import make_stale_head
+    ckpt = torch.load(path, weights_only=False)
+    mean, std = torch.tensor(ckpt["mean"], device=device), torch.tensor(ckpt["std"], device=device)
+    head = make_stale_head(len(ckpt["mean"])).to(device).eval()
+    head.load_state_dict(ckpt["state_dict"])
+    return lambda feats: float(torch.sigmoid(head((feats - mean) / std))[0, 0])
 
 
 class PlannerSubtask:
     """Stateful subtask source for one episode: asks the full model (thinking) when needed."""
 
-    def __init__(self, model, tok, every=0, threshold=None, cooldown=5, max_new_tokens=1536):
+    def __init__(self, model, tok, every=0, threshold=None, cooldown=5, max_new_tokens=1536,
+                 stale_router=None, stale_threshold=0.8):
         self.model, self.tok = model, tok
+        self.stale_router, self.stale_threshold, self.last_stale = stale_router, stale_threshold, 0.0
         self.every, self.threshold, self.cooldown, self.max_new = every, threshold, cooldown, max_new_tokens
         self.current, self.t, self.last_call, self.last_conf = None, 0, -10**9, 1.0
         self.calls, self.seconds, self.log = 0, 0.0, []
 
-    def observe(self, probs):
+    def observe(self, probs, features=None):
         self.last_conf = float(probs.max())
+        if self.stale_router is not None and features is not None:
+            self.last_stale = self.stale_router(features)
 
     def __call__(self, task, obs):
         due = self.current is None or (self.every and self.t - self.last_call >= self.every)
-        unsure = (self.threshold is not None and self.last_conf < self.threshold
-                  and self.t - self.last_call >= self.cooldown)
+        cooled = self.t - self.last_call >= self.cooldown
+        unsure = cooled and (
+            (self.threshold is not None and self.last_conf < self.threshold)
+            or (self.stale_router is not None and self.last_stale > self.stale_threshold))
         if due or unsure:
             start = time.perf_counter()
             answer = plan(self.model, self.tok, task, [obs], True, self.max_new)[0][0]
@@ -98,7 +118,7 @@ def run_episode(task, seed, policy, expert, max_steps, subtask_fn=None):
         torch.cuda.synchronize()
         ms = (time.perf_counter() - start) * 1000
         if hasattr(subtask_fn, "observe"):
-            subtask_fn.observe(probs)
+            subtask_fn.observe(probs, getattr(policy, "last_features", None))
         expert_cls = continuous_to_class(expert.get_action(obs))
         steps.append({"step": t, "class": cls, "expert_class": expert_cls, "top_prob": float(probs.max()), "ms": ms})
         obs, _, terminated, truncated, info = env.step(class_to_continuous(cls))
@@ -138,16 +158,20 @@ def main():
     parser.add_argument("--router-threshold", type=float, default=None, help="call planner if top prob < this")
     parser.add_argument("--cooldown", type=int, default=5)
     parser.add_argument("--heads-dir", default=None, help="override the heads folder")
+    parser.add_argument("--stale-router", default=None, help="path to stale_layer<k>.pt (must match --layers)")
+    parser.add_argument("--stale-threshold", type=float, default=0.8)
     parser.add_argument("--out", default=None, help="default: outputs/rollouts/<model>[-subtask]")
     args = parser.parse_args()
     short = args.model.split("/")[-1]
     uses_subtask = args.subtask != "none"
     heads_dir = args.heads_dir or os.path.join("outputs/heads", short + ("-subtask" if uses_subtask else ""))
-    tag = {"none": "", "oracle": "-subtask", "planner": f"-planner-every{args.plan_every}-thr{args.router_threshold}"}
+    tag = {"none": "", "oracle": "-subtask", "planner": f"-planner-every{args.plan_every}-thr{args.router_threshold}"
+           + ("-stale" if args.stale_router else "")}
     args.out = args.out or os.path.join("outputs/rollouts", short + tag[args.subtask])
     os.makedirs(args.out, exist_ok=True)
 
     tok, model = load_qwen(args.model)
+    stale = load_stale_router(args.stale_router, model.device) if args.stale_router else None
     summary = []
     print(f"{'layer':>5}  {'task':<14}{'success':>9}{'steps':>7}{'ms/dec':>8}{'agree':>7}{'conf':>6}")
     for k in args.layers:
@@ -158,7 +182,8 @@ def main():
             episodes = []
             for i in range(args.episodes):
                 if args.subtask == "planner":
-                    subtask_fn = PlannerSubtask(model, tok, args.plan_every, args.router_threshold, args.cooldown)
+                    subtask_fn = PlannerSubtask(model, tok, args.plan_every, args.router_threshold, args.cooldown,
+                                                stale_router=stale, stale_threshold=args.stale_threshold)
                 else:
                     subtask_fn = expert_subtask if args.subtask == "oracle" else None
                 episodes.append(run_episode(task, args.seed + i, policy, expert, args.max_steps, subtask_fn))
