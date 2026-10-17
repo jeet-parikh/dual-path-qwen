@@ -58,15 +58,17 @@ def _fmt(values):
     return "(" + ", ".join(f"{round(float(v), 2) + 0.0:.2f}" for v in values) + ")"
 
 
-def obs_to_prompt(obs, task):
+def obs_to_prompt(obs, task, subtask=None):
     """Turn a 39-number Meta-World observation into the text prompt Qwen sees.
 
     Layout: [0:3] hand xyz, [3] gripper opening, [4:7] object xyz, [36:39] goal xyz.
+    If `subtask` is given (from the planner, or the expert's stage), it is added after the task.
     """
     obs = np.asarray(obs)
     gripper = round(float(obs[3]), 2) + 0.0
+    subtask_line = f"Subtask: {subtask}.\n" if subtask else ""
     return (
-        f"Task: {TASKS[task][0]}\n"
+        f"Task: {TASKS[task][0]}\n{subtask_line}"
         f"Hand: {_fmt(obs[0:3])}. Gripper: {gripper:.2f}.\n"
         f"Object: {_fmt(obs[4:7])}. Goal: {_fmt(obs[36:39])}.\n"
         f"Action:"

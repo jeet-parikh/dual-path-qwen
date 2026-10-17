@@ -208,3 +208,53 @@ Takeaways:
 | push-v3 | 286/300 (95.3%) | **300/300** | 99 |
 
 All families and directions ≥ 93% for the plain expert, 100% discretized. Takeaway: the scripted experts can be steered to arbitrary table targets by overwriting the goal slot, so chained multi-step tasks (e.g. push the puck to a spot, then reach a marker) are feasible with free expert data. The discretized push expert was even more reliable than the plain one here.
+
+## 2026-10-18 — Fast path v2: subtask conditioning and direct numbers (Qwen3-1.7B, MLP heads)
+
+`extract_hidden.py --subtask` (prompt gains `Subtask: <expert stage>.`), then `train_heads.py --heads mlp [--features-suffix=-subtask] [--numbers prompt|state]`. Same split and settings as heads v2. Test accuracy (%):
+
+| layer | prompt (v2) | + raw prompt numbers | **+ subtask line** | + subtask + prompt numbers | + subtask + full-precision state |
+|---|---|---|---|---|---|
+| 4 | 68.6 | 72.3 | 73.1 | 76.8 | 82.1 |
+| 8 | 71.5 | 72.4 | 75.3 | 77.6 | 82.7 |
+| 12 | 71.1 | 73.1 | **77.4** | 77.7 | 81.2 |
+| 16 | 72.4 | 72.5 | 77.2 | 77.7 | 80.4 |
+| 20 | 71.6 | 71.6 | 77.3 | 78.0 | 80.9 |
+| 24 | 70.4 | 72.5 | 75.3 | 77.6 | 83.9 |
+| 28 | 70.2 | 72.1 | 75.1 | 77.4 | 84.6 |
+
+Reference (no LLM): MLP on rounded prompt numbers + task id 76.3%; on full-precision state + task id 96.7%.
+
+Takeaways:
+- **Telling the executor its subtask helps: +5 points** at the best layer (72.4 → 77.4%), mostly on push (65.6 → 74.9%, +9). The planner's output has a measurable effect on execution, which is the proposal's core interaction.
+- Giving the head the numbers directly **flattens the depth curve.** With subtask + prompt numbers, layer 4 (76.8%) ≈ layer 20 (78.0%). Once numbers bypass the LLM, the executor's LLM features only need to carry task/subtask meaning, and 4 layers suffice.
+- Full-precision numbers + Qwen features (80–85%) do *worse* than full-precision numbers alone (96.7%). The 2,048-dim features let the head overfit (train 93–95%). A head design that keeps numbers primary (e.g. a small projection of the LLM features) is needed before claiming anything here.
+
+## 2026-10-18 — Closed loop with oracle subtask (Qwen3-1.7B, MLP heads on subtask prompts)
+
+`python src/rollout.py --subtask oracle --layers 4 16 28 --episodes 20` (same seeds 10000–10019 as the no-subtask run)
+
+| layer | subtask in prompt | reach | push | pick-place | total |
+|---|---|---|---|---|---|
+| 4 | no | 19 | 4 | 10 | 33/60 |
+| 4 | oracle | 13 | 6 | 10 | 29/60 |
+| 16 | no | 20 | 11 | 12 | 43/60 |
+| 16 | oracle | 15 | 13 | 16 | 44/60 |
+| 28 | no | 16 | 6 | 15 | 37/60 |
+| 28 | oracle | 16 | 8 | 12 | 36/60 |
+
+Takeaway: no clear closed-loop gain at 20 episodes. Push/pick-place improve at layer 16, but reach (single subtask, so unaffected by subtask text) drops 20 → 15, which shows how much heads retrained on the same data, and 20-episode estimates, vary. Need ≥ 50 episodes per cell to resolve a few-point effect.
+
+## 2026-10-18 — Planner (slow path): subtask decisions by the full model
+
+`python src/planner.py --per-subtask 30 [--thinking]` (Qwen3-1.7B; given the task procedure in plain language + state with 3-decimal coordinates; must name the active subtask; scored against the expert's stage on held-out-episode states, 30 per subtask; batched, batch 32)
+
+| mode | push | pick-place | time per call (batched) |
+|---|---|---|---|
+| direct answer | 33% (always "move above the puck") | 25% (same) | 6–9 ms |
+| **thinking** | **93%** | **86%** | 0.5–0.9 s |
+
+Takeaways:
+- **Without reasoning, the full model is at chance;** it always names the first option. **With step-by-step reasoning it reaches 86–93%.** Its thinking computes the horizontal and vertical distances explicitly and applies the procedure.
+- This is the system-1/system-2 split in action: the reactive policy needs ms-level decisions, while correct subtask decisions need hundreds of reasoning tokens. So the slow path can only run occasionally (every N steps or when triggered), which is the proposal's design.
+- Thinking costs ~100× more than a direct answer, and unbatched calls will be slower still (to measure in the loop).

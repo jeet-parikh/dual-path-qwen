@@ -12,7 +12,11 @@ Baselines: most common class (overall / per task), and MLPs on numbers instead o
   prompt_ceiling: best possible accuracy from the prompt text (identical rounded prompts can have
                   different expert actions; this predicts each prompt's most common test label)
 
-Usage: python src/train_heads.py --model Qwen3-1.7B [--layers 4 8 ...] [--epochs 200]
+--numbers concatenates numbers onto the Qwen features before the head:
+  prompt: the rounded numbers shown in the prompt + task id (same information as the text)
+  state:  full-precision observation + task id
+
+Usage: python src/train_heads.py --model Qwen3-1.7B [--features-suffix -subtask] [--numbers prompt] [--epochs 200]
 """
 
 import argparse
@@ -121,10 +125,13 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--baseline-epochs", type=int, default=1000, help="small-input MLPs learn slowly")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--out", default=None, help="default: outputs/heads/<model>")
+    parser.add_argument("--features-suffix", default="", help="e.g. -subtask -> outputs/hidden/<model>-subtask")
+    parser.add_argument("--numbers", default="none", choices=["none", "prompt", "state"])
+    parser.add_argument("--out", default=None, help="default: outputs/heads/<model><suffix>[-num<numbers>]")
     args = parser.parse_args()
-    feat_dir = os.path.join("outputs/hidden", args.model)
-    args.out = args.out or os.path.join("outputs/heads", args.model)
+    feat_dir = os.path.join("outputs/hidden", args.model + args.features_suffix)
+    tag = args.features_suffix + ("" if args.numbers == "none" else f"-num{args.numbers}")
+    args.out = args.out or os.path.join("outputs/heads", args.model + tag)
     os.makedirs(args.out, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -158,9 +165,13 @@ def main():
     for name, r in results["baselines"].items():
         print(f"  baseline {name:<14} test acc {r['overall']:.3f}")
 
+    extra = {"none": None, "prompt": np.concatenate([prompt_numbers, task_id], 1),
+             "state": np.concatenate([obs, task_id], 1)}[args.numbers]
     print(f"\n{'layer':>5}" + "".join(f"{k + ' test':>13}{k + ' train':>13}" for k in args.heads))
     for k in layers:
         x = np.load(os.path.join(feat_dir, f"layer{k}.npy")).astype(np.float32)
+        if extra is not None:
+            x = np.concatenate([x, extra], 1)
         results["layers"][k] = {}
         line = f"{k:>5}"
         for kind in args.heads:

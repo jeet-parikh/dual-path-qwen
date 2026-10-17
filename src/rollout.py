@@ -5,7 +5,10 @@ state -> prompt -> first k Qwen layers -> head -> action class -> continuous act
 Per episode we record success and steps; per decision the time (tokenize + Qwen + head), the
 head's top probability, and whether it matched the expert's class at that same state.
 
-Usage: python src/rollout.py [--model Qwen/Qwen3-1.7B] [--layers 4 16 28] [--head mlp] [--episodes 20]
+With --subtask oracle, the prompt includes the expert's current stage (an upper bound for a planner);
+heads are then loaded from outputs/heads/<model>-subtask.
+
+Usage: python src/rollout.py [--model Qwen/Qwen3-1.7B] [--layers 4 16 28] [--head mlp] [--episodes 20] [--subtask oracle]
 Needs a GPU. Episode i uses env seed (seed + i), default 10000+, so layouts never overlap with
 the training data (seeds 0..499).
 """
@@ -19,7 +22,8 @@ import warnings
 import numpy as np
 import torch
 
-from common import TASKS, class_to_continuous, continuous_to_class, episode_env, get_expert, obs_to_prompt
+from common import (TASKS, class_to_continuous, continuous_to_class, episode_env, expert_subtask, get_expert,
+                    obs_to_prompt)
 from qwen import fast_features, load_qwen
 from train_heads import make_head
 
@@ -45,13 +49,16 @@ def fast_policy(model, tok, head, k):
     return policy
 
 
-def run_episode(task, seed, policy, expert, max_steps):
-    """Run one episode (layout given by seed) with `policy`. Returns episode stats and per-step logs."""
+def run_episode(task, seed, policy, expert, max_steps, subtask_fn=None):
+    """Run one episode (layout given by seed) with `policy`. Returns episode stats and per-step logs.
+
+    subtask_fn(task, obs) -> subtask text for the prompt, or None for no subtask line.
+    """
     env, obs = episode_env(task, seed)
     steps = []
     success = False
     for t in range(max_steps):
-        prompt = obs_to_prompt(obs, task)
+        prompt = obs_to_prompt(obs, task, subtask_fn(task, obs) if subtask_fn else None)
         torch.cuda.synchronize()
         start = time.perf_counter()
         cls, probs = policy(prompt)
@@ -85,21 +92,24 @@ def main():
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--seed", type=int, default=10000)
     parser.add_argument("--max-steps", type=int, default=500)
-    parser.add_argument("--out", default=None, help="default: outputs/rollouts/<model>")
+    parser.add_argument("--subtask", default="none", choices=["none", "oracle"])
+    parser.add_argument("--out", default=None, help="default: outputs/rollouts/<model>[-subtask]")
     args = parser.parse_args()
     short = args.model.split("/")[-1]
-    args.out = args.out or os.path.join("outputs/rollouts", short)
+    heads_dir = os.path.join("outputs/heads", short + ("-subtask" if args.subtask == "oracle" else ""))
+    subtask_fn = expert_subtask if args.subtask == "oracle" else None
+    args.out = args.out or os.path.join("outputs/rollouts", short + ("-subtask" if args.subtask == "oracle" else ""))
     os.makedirs(args.out, exist_ok=True)
 
     tok, model = load_qwen(args.model)
     summary = []
     print(f"{'layer':>5}  {'task':<14}{'success':>9}{'steps':>7}{'ms/dec':>8}{'agree':>7}{'conf':>6}")
     for k in args.layers:
-        head = load_head(os.path.join("outputs/heads", short, f"{args.head}_layer{k}.pt"), model.device)
+        head = load_head(os.path.join(heads_dir, f"{args.head}_layer{k}.pt"), model.device)
         policy = fast_policy(model, tok, head, k)
         for task in args.tasks:
             expert = get_expert(task)  # same seeds for every layer -> same layouts
-            episodes = [run_episode(task, args.seed + i, policy, expert, args.max_steps)
+            episodes = [run_episode(task, args.seed + i, policy, expert, args.max_steps, subtask_fn)
                         for i in range(args.episodes)]
             row = {
                 "layer": k, "task": task, "head": args.head,

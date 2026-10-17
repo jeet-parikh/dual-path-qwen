@@ -5,7 +5,8 @@ Outputs in <out>/ (row i of every file is the same dataset step):
   meta.npz      action_class, episode_id, task, subtask, step, obs
   args.json
 
-Batches hold one task's prompts, which all have the same token length, so there is no padding.
+Batches hold prompts of equal token length (bucketed), so there is no padding.
+With --subtask, prompts are rebuilt from each row's obs with the expert's subtask line added.
 
 Usage: python src/extract_hidden.py [--model Qwen/Qwen3-0.6B] [--limit 200] [--out outputs/hidden/<model>]
 Needs a GPU.
@@ -20,8 +21,8 @@ import warnings
 import numpy as np
 import torch
 
-from common import TASKS
-from qwen import DEFAULT_LAYERS, layer_features, load_qwen, num_layers
+from common import TASKS, obs_to_prompt
+from qwen import DEFAULT_LAYERS, layer_features_bucketed, load_qwen, num_layers
 
 warnings.filterwarnings("ignore")
 
@@ -34,9 +35,10 @@ def main():
     parser.add_argument("--layers", nargs="+", type=int, default=DEFAULT_LAYERS)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--limit", type=int, default=None, help="only the first N steps per task (for testing)")
-    parser.add_argument("--out", default=None, help="default: outputs/hidden/<model name>")
+    parser.add_argument("--subtask", action="store_true", help="add the expert's subtask line to each prompt")
+    parser.add_argument("--out", default=None, help="default: outputs/hidden/<model name>[-subtask]")
     args = parser.parse_args()
-    args.out = args.out or os.path.join("outputs/hidden", args.model.split("/")[-1])
+    args.out = args.out or os.path.join("outputs/hidden", args.model.split("/")[-1] + ("-subtask" if args.subtask else ""))
 
     tok, model = load_qwen(args.model)
     assert max(args.layers) <= num_layers(model), f"model has only {num_layers(model)} layers"
@@ -50,12 +52,11 @@ def main():
     feats = {k: [] for k in args.layers}
     start = time.time()
     for task in args.tasks:
-        prompts = [r["prompt"] for r in rows if r["task"] == task]
-        assert len({len(ids) for ids in tok(prompts).input_ids}) == 1, f"{task}: prompts differ in length"
-        for i in range(0, len(prompts), args.batch_size):
-            out = layer_features(model, tok, prompts[i : i + args.batch_size], args.layers)
-            for k in args.layers:
-                feats[k].append(out[k].half().cpu().numpy())
+        task_rows = [r for r in rows if r["task"] == task]
+        prompts = [obs_to_prompt(r["obs"], task, r["subtask"]) if args.subtask else r["prompt"] for r in task_rows]
+        out = layer_features_bucketed(model, tok, prompts, args.layers, args.batch_size)
+        for k in args.layers:
+            feats[k].append(out[k].half().cpu().numpy())
         print(f"{task}: {len(prompts)} prompts done ({time.time() - start:.0f}s)")
 
     os.makedirs(args.out, exist_ok=True)
