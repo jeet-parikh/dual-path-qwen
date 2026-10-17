@@ -1,0 +1,24 @@
+# Data, caches, model artifacts, logs: never commit
+outputs
+data/
+cache/
+hidden/
+*.jsonl
+*.npy
+*.npz
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+checkpoints/
+results/
+logs/
+*.log
+slurm-*.out
+hf_cache/
+wandb/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
