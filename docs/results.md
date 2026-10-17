@@ -320,3 +320,20 @@ Takeaway: the fast path's own features already encode whether its subtask fits t
 | **staleness router > 0.8** | 4/10 | **9.8 / 4.0** | 92% |
 
 Takeaway: the learned staleness router fixes the confidence router's failure (0 → 4/10) and roughly matches periodic planning with ~25% fewer planner calls (~30% fewer in successful episodes). At 10 episodes the 5 vs. 4 difference is noise. The remaining failures are mostly executor failures (stuck hovering near the puck), not planning errors.
+
+## 2026-10-18 — Router comparison, 20 episodes each (push, layer 16, DAgger heads)
+
+Combined seeds 10000–10019 (the 10-episode runs above + `outputs/rollouts/r2_*`). Hybrid = staleness router plus a planner call every 50 steps as a safety net.
+
+| planner trigger | success | planner calls / episode | planner correct |
+|---|---|---|---|
+| every 25 steps | 8/20 (40%) | 14.9 | 89% |
+| staleness router > 0.8 | 9/20 (45%) | **8.2** | 93% |
+| hybrid: staleness + every 50 | **10/20 (50%)** | 11.2 | 93% |
+| fast-head confidence < 0.4 (10 episodes) | 0/10 | 5.8 | 86% |
+| oracle subtask (reference, 30 episodes) | 16/30 (53%) | — | — |
+
+Takeaways:
+- **The learned staleness router matches periodic planning with ~45% fewer planner calls** (8.2 vs. 14.9 per episode). The hybrid gets closest to the oracle-subtask reference (50% vs. 53%).
+- All planner-based setups are now near the oracle ceiling, so **planning is no longer the bottleneck; the executor is** (push ~50% even with perfect subtasks).
+- Differences of 1–2 successes in 20 are within noise; the robust claim is "same success, roughly half the planner calls."
