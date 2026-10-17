@@ -258,3 +258,27 @@ Takeaways:
 - **Without reasoning, the full model is at chance;** it always names the first option. **With step-by-step reasoning it reaches 86–93%.** Its thinking computes the horizontal and vertical distances explicitly and applies the procedure.
 - This is the system-1/system-2 split in action: the reactive policy needs ms-level decisions, while correct subtask decisions need hundreds of reasoning tokens. So the slow path can only run occasionally (every N steps or when triggered), which is the proposal's design.
 - Thinking costs ~100× more than a direct answer, and unbatched calls will be slower still (to measure in the loop).
+
+## 2026-10-18 — DAgger iteration 1 (Qwen3-1.7B, subtask prompts, MLP heads)
+
+`python src/dagger.py --episodes 200` (layer-16 head drives, oracle subtask in prompt, max 300 steps, env seeds 20000+; every visited state labeled with the expert's action and subtask) → merged with dataset v2 (198k rows) → `extract_hidden.py --subtask` → `train_heads.py --features-suffix=-subtask-d1` → `rollout.py --subtask oracle --episodes 30`.
+
+During collection the pre-DAgger policy (layer 16) succeeded on 163/200 reach, 123/200 push, 168/200 pick-place (82 / 62 / 84%; 300-step cap). That is the best success estimate so far for the pre-DAgger policy (10× more episodes).
+
+Closed-loop success with oracle subtask, before (20 episodes, seeds 10000–10019) vs. after DAgger (30 episodes, seeds 10000–10029):
+
+| layer | reach | push | pick-place | total |
+|---|---|---|---|---|
+| 4 before | 65% | 30% | 50% | 48% |
+| **4 after** | **80%** | **50%** | **60%** | **63%** |
+| 16 before | 75% | 65% | 80% | 73% |
+| 16 after | 87% | 53% | 83% | 74% |
+| 28 before | 80% | 40% | 60% | 60% |
+| 28 after | 70% | 53% | 63% | 62% |
+
+ms/decision after: 2.1 / 6.0 / 9.6 at layers 4 / 16 / 28.
+
+Takeaways:
+- **DAgger helps the shallowest executor most** (+15 points at layer 4, push 30 → 50%), even though the recovery data was collected by the layer-16 policy. Layers 16 and 28 are unchanged within noise (±9 points at 30 episodes).
+- Offline test accuracy fell (77 → 69%) because the test split now contains hard drifted states. Not comparable to earlier offline numbers.
+- **The fast head's confidence predicts its errors** (push, layer 16): steps with top prob < 0.4 (5% of steps) disagree with the expert 96% of the time vs. 68% otherwise; < 0.5 (14% of steps): 92% vs. 65%. So confidence is a usable router signal.
