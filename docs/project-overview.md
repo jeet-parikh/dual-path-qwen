@@ -58,15 +58,21 @@ Action:
 
 **Meta-World observation layout (39 numbers):** `[0:3]` hand xyz, `[3]` gripper opening, `[4:7]` object xyz, `[7:18]` object rotation / second object, `[18:36]` previous frame, `[36:39]` goal xyz. The goal is visible in the observation in the MT1 environments we use (verified).
 
-**Discretization was validated** in an earlier prototype. A check script ran the expert normally and with its actions squashed into the 54 classes and back ("discretized expert"). The first setting (dead zone 0.15) broke reach (12/20 successes) because the robot overshot near the goal. A sweep found `DEAD_ZONE = 0.05`, `MOVE_SIZE = 0.5` works: **30/30 successes on all three tasks** for both the expert and the discretized expert (Meta-World 3.1.1). This matters because a classifier imitating the expert can at best match the discretized expert.
+**Discretization was validated** in an earlier prototype. A check script ran the expert normally and with its actions squashed into the 54 classes and back ("discretized expert"). The first setting (dead zone 0.15) broke reach (12/20 successes) because the robot overshot near the goal. A sweep found `DEAD_ZONE = 0.05`, `MOVE_SIZE = 0.5` works: **30/30 successes on all three tasks** for both the expert and the discretized expert (Meta-World 3.1.1). This matters because a classifier imitating the expert can at best match the discretized expert. **Caveat (2026-10-18):** over 200 episodes the discretized expert gets 194/200 on pick-place (plain expert 200/200): fixed-size moves occasionally knock the puck and the gripper closes too early. So the pick-place ceiling is ~97%.
 
 **Data format** (handoff from data generation to everything else), `data/<task>.jsonl`, one line per step:
 
 ```json
-{"episode_id": "push_0042", "task": "push-v3", "step": 17, "prompt": "...", "action_class": 31, "action_continuous": [0.4, -0.1, 0.0, 1.0]}
+{"episode_id": "push_0042", "task": "push-v3", "step": 17, "prompt": "...", "action_class": 39, "action_continuous": [0.4, -0.1, 0.0, 1.0], "subtask": "push the puck to the goal", "obs": [... 39 numbers ...]}
 ```
 
-(The values in this example are illustrative; `action_class` always comes from `continuous_to_class` in `src/common.py`.)
+- `action_class` = `continuous_to_class(action_continuous)`; `action_continuous` is the raw expert action (the label).
+- `subtask` = the expert's active stage, from `expert_subtask` in `src/common.py` (mirrors the expert's if/else branches). Used for planner work later.
+- `obs` = raw observation, for the raw-state MLP baseline.
+- **The robot executes the discretized action during data generation**, so recorded states match what a perfect 54-class policy visits.
+- **Only successful episodes are saved.**
+
+Current dataset (`python src/data_gen.py --episodes 200 --seed 0`): 48,222 steps from 594 episodes. See `docs/results.md`.
 
 ## 4. Week 1 plan (MVP for the progress report)
 

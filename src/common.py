@@ -108,6 +108,35 @@ def discretize(action):
 
 
 # ---------------------------------------------------------------------------
+# Subtask labels (which stage of the expert's script is active)
+# ---------------------------------------------------------------------------
+
+def expert_subtask(task, obs):
+    """Return the expert's current stage as text.
+
+    Mirrors the if/else branches in metaworld/policies/sawyer_<task>_policy.py
+    (`_desired_pos`); keep in sync if Meta-World changes.
+    """
+    obs = np.asarray(obs)
+    hand, gripper, puck = obs[0:3], obs[3], obs[4:7] + np.array([-0.005, 0, 0])
+    if task == "reach-v3":
+        return "move to the goal"
+    if np.linalg.norm(hand[:2] - puck[:2]) > 0.02:
+        return "move above the puck"
+    if task == "push-v3":
+        if abs(hand[2] - puck[2]) > 0.04:
+            return "lower onto the puck"
+        return "push the puck to the goal"
+    if task == "pick-place-v3":
+        if abs(hand[2] - puck[2]) > 0.05 and puck[2] < 0.04:
+            return "lower onto the puck"
+        if gripper > 0.73:
+            return "grasp the puck"
+        return "carry the puck to the goal"
+    raise ValueError(f"unknown task {task}")
+
+
+# ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------
 

@@ -57,11 +57,11 @@ If time runs short, protect the planner loop and the two-router comparison; thes
 
 Not yet locked into the overview. Move each into `project-overview.md` once agreed.
 
-- [ ] Raw-state MLP baseline in `train_heads.py` (week 1).
+- [ ] Raw-state MLP baseline in `train_heads.py` (week 1). Raw `obs` is already saved in the data.
 - [ ] One shared head across all three tasks, alongside or instead of per-task heads.
 - [ ] DAgger loop in week 2.
-- [ ] Subtask labels taken from the expert policies' stages, recorded during data generation (cheap to add in `data_gen.py` now, even if unused until week 3).
-- [ ] A dated results log, `docs/results.md`: command, settings, and number for every run.
+- [x] Subtask labels taken from the expert policies' stages, recorded during data generation. **Agreed and done 2026-10-18** (`subtask` field).
+- [x] A dated results log, `docs/results.md`: command, settings, and number for every run. **Done.**
 - [ ] Optional: LoRA ablation for Q2.
 
 ## 5. Reference baselines for every result
