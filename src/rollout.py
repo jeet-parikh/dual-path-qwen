@@ -137,11 +137,12 @@ def main():
     parser.add_argument("--plan-every", type=int, default=0, help="planner call every N steps (0 = off)")
     parser.add_argument("--router-threshold", type=float, default=None, help="call planner if top prob < this")
     parser.add_argument("--cooldown", type=int, default=5)
+    parser.add_argument("--heads-dir", default=None, help="override the heads folder")
     parser.add_argument("--out", default=None, help="default: outputs/rollouts/<model>[-subtask]")
     args = parser.parse_args()
     short = args.model.split("/")[-1]
     uses_subtask = args.subtask != "none"
-    heads_dir = os.path.join("outputs/heads", short + ("-subtask" if uses_subtask else ""))
+    heads_dir = args.heads_dir or os.path.join("outputs/heads", short + ("-subtask" if uses_subtask else ""))
     tag = {"none": "", "oracle": "-subtask", "planner": f"-planner-every{args.plan_every}-thr{args.router_threshold}"}
     args.out = args.out or os.path.join("outputs/rollouts", short + tag[args.subtask])
     os.makedirs(args.out, exist_ok=True)
