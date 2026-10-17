@@ -43,7 +43,7 @@ Final project for **CPSC 4880 (Advances in Frontier AI Models), Yale**. The prop
 | Discretization settings | `DEAD_ZONE = 0.05`, `MOVE_SIZE = 0.5`, `GRIP_THRESHOLD = 0.3` (tuned and verified, see below) |
 | Class index | `class = ((ix*3 + iy)*3 + iz)*2 + ig`, where `ix, iy, iz = direction + 1` (0, 1, 2) and `ig` = 0 open / 1 closed. Defined in `src/common.py` |
 | Class → continuous action | xyz = direction × `MOVE_SIZE`; gripper open → 0.0, closed → 1.0 (the experts use 0.0 for open and 0.6–1.0 for closed) |
-| Features | Last-token hidden state at layers 4, 8, 12, 16, 20, 24, 28 |
+| Features | Last-token hidden state at layers 4, 8, 12, 16, 20, 24, 28, **with the model's final RMSNorm applied** (= what a model cut to k layers outputs; raw residuals have outlier values ~6500, normed < 100). Defined in `src/qwen.py`; verified identical between cached full-pass features and the live first-k-layers fast path |
 | Qwen | **Frozen.** Never fine-tuned. Hidden states are extracted once and cached; heads train on the cache |
 | Train/test split | **By episode, never by step** (neighboring steps are nearly identical, so a step split inflates accuracy) |
 
@@ -119,14 +119,14 @@ Kept deliberately simple: no package install, no test framework.
 
 ```
 docs/      project-overview.md, proposal.md, proposal-analysis.md, results.md (dated results log)
-src/       common.py + one script per pipeline step (run as `python src/<script>.py ...` from the repo root)
+src/       common.py (prompts/actions/envs), qwen.py (model loading/features) + one script per pipeline step (run as `python src/<script>.py ...` from the repo root)
 slurm/     sbatch scripts for heavy jobs
 outputs/   symlink to ~/scratch_cpsc4880/$USER/outputs (gitignored): data/ hidden/ heads/ rollouts/ logs/
 ```
 
 - Scripts import shared code with `from common import ...` (works because Python adds the script's folder to its import path).
 - Every script takes command-line arguments, defaults to writing under `outputs/`, and saves its arguments as `args.json` next to its outputs.
-- `common.py`'s self-test (`python src/common.py`) is the only test.
+- `common.py`'s self-test (`python src/common.py`) and the `check_*.py` scripts are the only tests.
 
 ## 8. Rules for Claude
 
