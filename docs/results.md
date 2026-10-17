@@ -64,3 +64,37 @@ Takeaways:
 Notes:
 - Prompt length is fixed per task (reach 77, push 80, pick-place 84 tokens), so per-task batches need no padding.
 - Batched vs. single-prompt features differ by ~1% (relative L2) from bf16 rounding with different batch sizes, even without padding. Harmless noise for the heads.
+
+## 2026-10-18 — Action heads: accuracy vs. layer (the main week-1 result)
+
+`python src/train_heads.py --model Qwen3-{0.6B,1.7B}` then `python src/plot_heads.py` → `figures/`
+Split by episode within each task: 33,686 train / 4,793 val / 9,743 test steps. One shared head for all tasks. 200 epochs (AdamW, lr 1e-3), best-val epoch kept. Baseline MLPs: 1000 epochs.
+
+Test accuracy (%), 54 classes:
+
+| layer | 0.6B linear | 0.6B MLP | 1.7B linear | 1.7B MLP |
+|---|---|---|---|---|
+| 4 | 83.0 | 89.2 | 88.1 | 90.3 |
+| 8 | 86.2 | 90.9 | 88.6 | 90.8 |
+| 12 | 87.3 | 90.9 | 89.3 | 91.3 |
+| 16 | 88.5 | 91.3 | 89.2 | 90.8 |
+| 20 | 85.8 | 91.4 | 88.9 | 90.2 |
+| 24 | 82.3 | 90.1 | 86.5 | 89.7 |
+| 28 | 80.8 | 90.3 | 86.2 | 89.4 |
+
+| baseline | test acc |
+|---|---|
+| always most common class | 15.8 |
+| most common class per task | 32.0 |
+| MLP on the prompt's rounded numbers + task id | 86.7 (still slowly improving at 1000 epochs) |
+| best possible from prompt text (oracle) | 94.4 |
+| MLP on full-precision state + task id | 97.7 |
+
+Takeaways:
+- **Layer 4 of 28 is already within ~1 point of the best layer** (MLP heads ~90–91% everywhere). This is the core hypothesis holding offline.
+- Middle layers (8–20) are best; the final layer is slightly worse, sharply so for linear heads (0.6B linear: 88.5% at layer 16 → 80.8% at 28). Action-relevant info is most linearly accessible mid-network.
+- 0.6B ≈ 1.7B with MLP heads; 1.7B features are more linearly decodable.
+- **The prompt format sets the ceiling.** 2-decimal rounding makes identical prompts map to different expert actions: only 8,249 distinct prompts in 48k steps, best possible 94.4% (push 91.5%). Qwen MLP heads train to 94.0%, i.e. at that ceiling. Full-precision state reaches 97.7%. Rounding costs ~3 points.
+- Qwen features beat an MLP reading the same rounded numbers (91 vs. 87%), with the caveat that this baseline was still slowly improving.
+- Hardest subtask: pick-place "lower onto the puck" (78–82%, ceiling 87%).
+- Training budget mattered: 40 epochs understated linear heads by up to 5 points and the state baseline by 15. Undertrained baselines would have flattered Qwen.
