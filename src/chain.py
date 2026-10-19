@@ -131,7 +131,7 @@ def step_text(step):
 
 def sample_step(rng, history):
     fam = str(rng.choice(FAMILIES))
-    if fam in ("relative", "back") and len(history) < 2:
+    if fam in ("relative", "back") and len(history) < 2 or fam == "relative" and history[-1] == "start":
         fam = "direct"
     step = {"family": fam, "verb": str(rng.choice(VERBS))}
     c = list(rng.choice(COLORS, size=4, replace=False))
