@@ -83,7 +83,12 @@ def qwen_planner(model_name, thinking, batch_size, loaded=None):
     from qwen import load_qwen
 
     tok, model = loaded or load_qwen(model_name)
-    max_new = 3072 if thinking else 16
+    # Direct mode: the answer is begun for the model ("The robot should go to the") and its next
+    # word is read off, restricted to the five places. Asked for one word, it otherwise starts a
+    # sentence ("The robot is currently at ...") and names no place within a short budget.
+    prefix = "The robot should go to the"
+    option_ids = [tok.encode(" " + p, add_special_tokens=False)[0] for p in PLACES]
+    assert len(set(option_ids)) == len(PLACES)
 
     @torch.no_grad()
     def plan(queries):
@@ -92,8 +97,16 @@ def qwen_planner(model_name, thinking, batch_size, loaded=None):
         for b in range(0, len(queries), batch_size):
             prompts = [tok.apply_chat_template(chain_messages(*q), tokenize=False, add_generation_prompt=True,
                                                enable_thinking=thinking) for q in queries[b:b + batch_size]]
+            if not thinking:
+                prompts = [p + prefix for p in prompts]
             batch = tok(prompts, return_tensors="pt", padding=True).to(model.device)
-            out = model.generate(**batch, max_new_tokens=max_new, do_sample=False)
+            if not thinking:
+                logits = model(**batch).logits[:, -1, option_ids]
+                picks = [PLACES[i] for i in logits.argmax(-1).tolist()]
+                answers += picks
+                texts += picks
+                continue
+            out = model.generate(**batch, max_new_tokens=3072, do_sample=False)
             t = tok.batch_decode(out[:, batch.input_ids.shape[1]:], skip_special_tokens=True)
             texts += t
             answers += [parse_place(x) for x in t]
