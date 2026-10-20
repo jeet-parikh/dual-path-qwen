@@ -120,6 +120,7 @@ def main():
     parser.add_argument("--test", default="outputs/chain_test")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--chunk", type=int, default=200, help="chains run at once (600 at once ran out of memory)")
     parser.add_argument("--out", default="outputs/chain_rollouts")
     parser.add_argument("--dagger-out", default=None, help="write expert-labeled visited states (reach-v3.jsonl) here")
     args = parser.parse_args()
@@ -135,7 +136,14 @@ def main():
     chains = load_chains(args.test, args.limit)
     t0 = time.time()
     dagger_rows = [] if args.dagger_out else None
-    results, timing = run(chains, plan, act, dagger_rows)
+    results, timing = [], {"planner_calls": 0, "executor_steps": 0, "planner_secs": 0.0}
+    for b in range(0, len(chains), args.chunk):  # one simulator per chain: cap how many are open
+        r, t = run(chains[b:b + args.chunk], plan, act, dagger_rows)
+        results += r
+        timing["planner_calls"] += t["planner_calls"]
+        timing["executor_steps"] += t["executor_steps"]
+        timing["planner_secs"] += t["planner_sec_per_call"] * t["planner_calls"]
+    timing["planner_sec_per_call"] = timing.pop("planner_secs") / max(timing["planner_calls"], 1)
     if args.dagger_out:
         os.makedirs(args.dagger_out, exist_ok=True)
         with open(os.path.join(args.dagger_out, f"{TASK}.jsonl"), "w") as f:
