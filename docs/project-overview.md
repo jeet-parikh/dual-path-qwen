@@ -78,11 +78,7 @@ Direction: the proposal's design, **one frozen Qwen as both planner (full depth)
 - **Multi-step instructions** (`src/chain*.py`): 1–4 step instructions over four text markers. Closed loop with the fast path: Qwen3-1.7B reasoning completes 94/82/74/64% vs. bag-of-words 86/70/42/36, direct 62/26/2/2, oracle plan 100/96/90/98. The fast path (layer 16 + one DAgger round) is no longer the bottleneck.
 - Dropped: language-specified single goals (side branch, 2026-10-18; small encoders matched Qwen). Code removed 2026-10-20; it is in git history.
 
-**Next (core, agreed 2026-10-20)**
-1. Compute accounting: latency and FLOPs per instruction for each setup.
-2. Split-model baseline: a separate Qwen3-0.6B executor + 1.7B planner vs. one 1.7B doing both.
-3. Resume-from-layer-k: when the planner is called, continue from the fast path's layer-k state.
-4. Early exit (adaptive fast-path depth by head confidence): quick baseline if time allows.
+**Done 2026-10-20 (core):** compute accounting and the split-model baseline (`src/compute_cost.py`, results log). Fast path + occasional reasoning is ~37x faster than reasoning before every move; reasoning is 98% of the time. A separate Qwen3-0.6B executor matches 1.7B layers 1-16 at ~1/3 the executor FLOPs, so the single model does not win on compute. **Resume-from-layer-k: skipped** (saves at most ~6% of a planner call; the cost is the ~1,400 decoded tokens).
 
 Later (improvements, not core): held-out wording for the chain task, more chains per point, the staleness router on chains, larger models.
 
