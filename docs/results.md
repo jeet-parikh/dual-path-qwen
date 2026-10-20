@@ -362,3 +362,36 @@ Takeaways:
 - Reasoning wins on steps needing logic or memory of earlier steps; bag-of-words is slightly better on plain distance comparisons (Qwen's arithmetic slips). Bag-of-words was trained on our exact templates; Qwen is zero-shot.
 - Caveats: one model size; 50 chains per point (±~13 points at 4 steps); 26/500 reasoning calls hit the 3,072-token limit. **The wording was changed after a first run**: v1 ("closest to the robot", "closest to the red one") was ambiguous and Qwen often read "robot" as the hand (18/27 extreme-step errors) or answered red itself. v1 offline results (reasoning 94/72/56/44, bag-of-words 87/75/50/37) are in `outputs/chain_planner_v1/`; the fix applies to all planners and leaves every correct answer unchanged.
 - Bugs fixed along the way: direct mode needs an answer prefix ("The robot should go to the") or Qwen3 starts a sentence and names no place; 600 simulators at once exceed the 16 GB job memory (now chunks of 200).
+
+## 2026-10-20 — Compute per instruction, executor depth, and the split-model baseline (chains, 200 test chains)
+
+`python src/compute_cost.py` (one request at a time on an RTX 5000 Ada; FLOPs estimated from parameter and token counts). Per call: 1.7B fast path 2.6 / 4.4 / 8.4 / 10.4 / 12.8 / 15.5 / 13.1 ms and 31 / 62 / 93 / 124 / 156 / 187 / 218 GFLOPs at layers 4–28 (77-token step prompt; ms-scale latency is noisy); planner direct 15 ms, 0.67 TFLOPs; **planner reasoning 20.4 s, 1,400 tokens written on average (median 1,478, max 3,072), 5.9 TFLOPs per call**.
+
+**Cost per instruction** (mean 93 env steps, 2.5 planner calls):
+
+| setup | success | seconds | TFLOPs | planner share of time |
+|---|---|---|---|---|
+| reasoning planner + fast path (layers 1–16) [ours] | 78% | 51 | 26 | 98% |
+| reasoning planner + full-depth executor (layers 1–28) | (cost only) | 51 | 35 | 98% |
+| reasoning planner at every step (no fast path) | (cost only) | 1,886 | 546 | 100% |
+| direct planner + fast path | 23% | 0.7 | 9.6 | 5% |
+
+**Executor only, oracle plans** (chains completed; executor TFLOPs per instruction):
+
+| executor | 1.7B: success / TFLOPs | 0.6B (separate model): success / TFLOPs |
+|---|---|---|
+| layers 1–4 | 92% / 3.3 | — |
+| layers 1–8 | 92% / 6.6 | 90% / 2.1 |
+| layers 1–12 | 96% / 9.1 | 96% / 2.8 |
+| layers 1–16 | **96% / 12.2** | 96% / 3.8 |
+| layers 1–20 | 94% / 15.7 | 96% / 4.8 |
+| layers 1–24 | 90% / 20.1 | 94% / 6.0 |
+| layers 1–28 (full) | 88% / 24.4 | 94% / 7.1 |
+
+0.6B per-step latency: 4.3 ms (8 layers) to 12.6 ms (28 layers), i.e. about the same as 1.7B layers 1–16 (10.4 ms): at batch size 1, latency follows the number of layers more than their width. DAgger data for all heads was collected with the 1.7B layer-16 policy.
+
+Takeaways:
+- **Fast path + occasional reasoning is ~37× faster and ~21× fewer FLOPs than reasoning before every move** (51 s vs. 31 min per instruction), and the full model is both the most expensive and the worst executor (88% vs. 96%).
+- **Reasoning dominates the time (98%)**: 2.5 calls × 20 s. The executor is ~1 s per instruction. The lever for speed is fewer or shorter planner calls, not a cheaper executor.
+- **Split-model baseline: a separate Qwen3-0.6B executes as well as 1.7B layers 1–16 (94–96%) at ~1/3 of the executor FLOPs, and the same latency.** On compute, the single model does not beat two models; total FLOPs per instruction would be ~22 vs. 26 TFLOPs (planner cost is shared). What the single model still offers: one set of weights in memory (1.7B vs. 2.3B parameters).
+- Resume-from-layer-k can save at most the planner's prefill through layer 16 (~0.4 of 5.9 TFLOPs per call, ~6%) and only if the planner's prompt starts with the fast path's prompt; the cost is in the ~1,400 decoded tokens.
