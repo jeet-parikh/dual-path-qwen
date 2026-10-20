@@ -21,8 +21,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 COLOR_HEX = {"red": "#d62728", "blue": "#1f77b4", "green": "#2ca02c", "yellow": "#e6b800"}
-LABELS = {"keyword": "Keyword rule", "bow": "Bag-of-words MLP", "direct": "Qwen, direct answer",
-          "think": "Qwen, step-by-step reasoning", "oracle": "Oracle plan"}
+LABELS = {"keyword": "Keyword rule", "bow": "Bag-of-words MLP", "direct": "direct answer",
+          "think": "step-by-step reasoning", "oracle": "Oracle plan"}
 STYLE = {"keyword": ("#9e9e9e", ":"), "bow": ("#7f7f7f", "--"), "direct": ("#ff7f0e", "-"),
          "think": ("#1f77b4", "-"), "oracle": ("#000000", "-.")}
 
@@ -50,7 +50,7 @@ def success_chart(files, offline, out):
         color, ls = STYLE.get(kind(name), ("#555", "-"))
         label = LABELS.get(kind(name), name)
         if "Qwen" in name:
-            label += f" ({name.split('_')[1]})"
+            label = f"{name.split('_')[1]}, {label}"
         ax.plot(xs, ys, ls, color=color, lw=2.2, marker="o", label=label)
         ax.fill_between(xs, np.array(ys) - err, np.array(ys) + err, color=color, alpha=0.08, lw=0)
     ax.set_xticks([1, 2, 3, 4])
@@ -75,11 +75,20 @@ def draw_panel(ax, r, title):
     path = np.array(r["path"])
     ax.plot(path[:, 0], path[:, 1], color="black", lw=1.6, alpha=0.8, zorder=2)
     # Label each step where the hand arrived (the next planner call, or the end of the path).
+    # Steps that end at the same place share one label ("1, 3: yellow").
     arrivals = [c["t"] for c in r["calls"][1:]] + [len(path) - 1]
+    groups = []  # [xy, answer, step numbers]
     for i, (call, t) in enumerate(zip(r["calls"], arrivals)):
-        px, py = path[t, :2]
-        ax.scatter(px, py, s=60, marker="*", color="black", zorder=4)
-        ax.annotate(f"{i + 1}: {call['answer']}", (px, py), xytext=(6, 6), textcoords="offset points",
+        xy = path[t, :2]
+        for g in groups:
+            if g[1] == call["answer"] and np.linalg.norm(g[0] - xy) < 0.06:
+                g[2].append(i + 1)
+                break
+        else:
+            groups.append([xy, call["answer"], [i + 1]])
+    for xy, answer, steps in groups:
+        ax.scatter(*xy, s=60, marker="*", color="black", zorder=4)
+        ax.annotate(f"{', '.join(map(str, steps))}: {answer}", xy, xytext=(6, 6), textcoords="offset points",
                     fontsize=8, fontweight="bold")
     verdict = "correct" if r["success"] else f"wrong (went to {', '.join(r['visited'])})"
     ax.set_title(f"{title}\n{verdict}", fontsize=10, color="#2ca02c" if r["success"] else "#d62728")
@@ -104,7 +113,8 @@ def trajectory_figure(paths, out, seed=None):
     axes = np.atleast_1d(axes)
     for ax, p, b in zip(axes, paths, by_seed):
         name = os.path.basename(p)[:-5].split("__")[0]
-        draw_panel(ax, b[seed], LABELS.get(kind(name), name))
+        label = LABELS.get(kind(name), name)
+        draw_panel(ax, b[seed], f"{name.split('_')[1]}, {label}" if "Qwen" in name else label)
     r = by_seed[0][seed]
     fig.suptitle("\n".join(textwrap.wrap(f"“{r['instruction']}”", 110)) + f"\ncorrect places: {', '.join(r['places'])}",
                  fontsize=10)

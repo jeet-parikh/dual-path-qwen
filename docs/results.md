@@ -337,3 +337,28 @@ Takeaways:
 - **The learned staleness router matches periodic planning with ~45% fewer planner calls** (8.2 vs. 14.9 per episode). The hybrid gets closest to the oracle-subtask reference (50% vs. 53%).
 - All planner-based setups are now near the oracle ceiling, so **planning is no longer the bottleneck; the executor is** (push ~50% even with perfect subtasks).
 - Differences of 1–2 successes in 20 are within noise; the robust claim is "same success, roughly half the planner calls."
+
+## 2026-10-19/20 — Multi-step instructions: does reasoning matter? (reach, 4 markers, Qwen3-1.7B)
+
+Task (`src/chain.py`): 1–4 step instructions over four colored text markers ("First, visit the marker closest to the blue one (not blue itself). Then touch the blue marker. Next, go back to the first marker you touched..."). Step types: plain color, leftmost/frontmost/..., closest/farthest to a color, closest to the one just touched, back to start/first, if-otherwise. The planner gets the instruction, markers, hand position, and how many steps are done; not which places were visited. Data: 600 train chains (seeds 20000+), 400 test (30000+); the expert completes 100%.
+
+Fast path: layer-16 MLP head trained on chain step data (the original reach head only saw goals in x ±0.1, y 0.8–0.9), plus one DAgger round on the train chains. With oracle plans: 100/84/68/68% → **100/96/90/98%** by length; the failures before DAgger were the hand drifting to the workspace edge.
+
+**Closed loop, planner + fast path, 200 test chains (50 per length), % of instructions completed:**
+
+| planner | 1 | 2 | 3 | 4 | s / planner call |
+|---|---|---|---|---|---|
+| oracle plan | 100 | 96 | 90 | 98 | — |
+| **Qwen3-1.7B, reasoning** | **94** | **82** | **74** | **64** | 11.2 (batched 32) |
+| bag-of-words MLP (trained on 21k chains) | 86 | 70 | 42 | 36 | ~0 |
+| Qwen3-1.7B, direct answer | 62 | 26 | 2 | 2 | 0.02 |
+| keyword rule | 50 | 12 | 6 | 0 | 0 |
+
+Offline (same 200 chains, plan only): reasoning 96/82/80/62, bag-of-words 89/68/54/36 (400 chains), direct 58/21/3/0. Step accuracy by type, reasoning vs. bag-of-words: if-otherwise 87 vs 32%, just-touched 86 vs 64%, back 100 vs 76%, plain 99 vs 100%, closest-to-color 78 vs 88%, extreme 82 vs 88%. Figures: `figures/chain_success.png`, `figures/chain_success_offline.png`, `figures/chain_trajectory.png`.
+
+Takeaways:
+- **Without reasoning, every planner collapses on long instructions; reasoning holds 64% at 4 steps vs. 36% for the best cheap planner, with the same frozen model's layers 1–16 executing.** Most of the remaining gap to the oracle is planning.
+- Qwen answering directly is no better than a keyword rule: the gain comes from reasoning, not model size.
+- Reasoning wins on steps needing logic or memory of earlier steps; bag-of-words is slightly better on plain distance comparisons (Qwen's arithmetic slips). Bag-of-words was trained on our exact templates; Qwen is zero-shot.
+- Caveats: one model size; 50 chains per point (±~13 points at 4 steps); 26/500 reasoning calls hit the 3,072-token limit. **The wording was changed after a first run**: v1 ("closest to the robot", "closest to the red one") was ambiguous and Qwen often read "robot" as the hand (18/27 extreme-step errors) or answered red itself. v1 offline results (reasoning 94/72/56/44, bag-of-words 87/75/50/37) are in `outputs/chain_planner_v1/`; the fix applies to all planners and leaves every correct answer unchanged.
+- Bugs fixed along the way: direct mode needs an answer prefix ("The robot should go to the") or Qwen3 starts a sentence and names no place; 600 simulators at once exceed the 16 GB job memory (now chunks of 200).
