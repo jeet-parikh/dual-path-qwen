@@ -10,7 +10,7 @@ Executors:
   fast     first k layers of Qwen + a head trained on chain step data (GPU)
 
 Usage: python src/chain_rollout.py --planner bow --executor expert --limit 100
-       python src/chain_rollout.py --planner think --executor fast --head outputs/heads/Qwen3-1.7B-chain/mlp_layer16.pt
+       python src/chain_rollout.py --planner think --executor fast (head: layer-16 DAgger head by default)
 """
 
 import argparse
@@ -21,10 +21,10 @@ import warnings
 
 import numpy as np
 
-from chain import COLORS, SEGMENT_STEPS, TASK, expert_action, expert_policy, place_xyz
+from chain import (COLORS, SEGMENT_STEPS, SUCCESS_RADIUS, TASK, expert_action, expert_policy, place_xyz,
+                   with_target)
 from chain_planner import load_chains, make_planner
 from common import class_to_continuous, continuous_to_class, episode_env, obs_to_prompt
-from lang import SUCCESS_RADIUS, with_target
 
 warnings.filterwarnings("ignore")
 
@@ -114,7 +114,7 @@ def main():
     parser.add_argument("--planner", choices=["keyword", "bow", "direct", "think", "oracle"], required=True)
     parser.add_argument("--executor", choices=["expert", "fast"], default="expert")
     parser.add_argument("--model", default="Qwen/Qwen3-1.7B")
-    parser.add_argument("--head", default="outputs/heads/Qwen3-1.7B-chain/mlp_layer16.pt")
+    parser.add_argument("--head", default="outputs/heads/Qwen3-1.7B-chain-d1/mlp_layer16.pt")
     parser.add_argument("--k", type=int, default=16)
     parser.add_argument("--train", default="outputs/chain_train")
     parser.add_argument("--test", default="outputs/chain_test")

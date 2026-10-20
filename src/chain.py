@@ -33,11 +33,11 @@ import warnings
 import numpy as np
 
 from common import class_to_continuous, continuous_to_class, episode_env, get_expert, obs_to_prompt
-from lang import REACH_Z, SUCCESS_RADIUS, with_target
-
 warnings.filterwarnings("ignore")
 
 TASK = "reach-v3"
+REACH_Z = 0.10           # height of marker targets
+SUCCESS_RADIUS = 0.05    # a place counts as reached within 5 cm
 COLORS = ["red", "blue", "green", "yellow"]
 MARKER_REGION = (np.array([-0.25, 0.50]), np.array([0.25, 0.85]))
 MIN_MARKER_GAP = 0.10
@@ -189,6 +189,13 @@ def scene_text(markers):
 # ---------------------------------------------------------------------------
 # Running a chain with a low-level policy
 # ---------------------------------------------------------------------------
+
+def with_target(obs, target):
+    """Copy of obs with the goal slot replaced by the current place (what the expert and prompt read)."""
+    obs = np.array(obs, dtype=np.float64)
+    obs[36:39] = target
+    return obs
+
 
 def run_chain(chain, seed, policy, next_place, record=False):
     """Drive the hand through the places that next_place picks, one instruction step at a time.
