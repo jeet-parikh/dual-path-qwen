@@ -21,9 +21,9 @@ import warnings
 
 import numpy as np
 
-from chain import COLORS, SEGMENT_STEPS, TASK, expert_policy, place_xyz
+from chain import COLORS, SEGMENT_STEPS, TASK, expert_action, expert_policy, place_xyz
 from chain_planner import load_chains, make_planner
-from common import class_to_continuous, episode_env, obs_to_prompt
+from common import class_to_continuous, continuous_to_class, episode_env, obs_to_prompt
 from lang import SUCCESS_RADIUS, with_target
 
 warnings.filterwarnings("ignore")
@@ -43,8 +43,12 @@ def fast_executor(tok, model, head_path, k):
     return act
 
 
-def run(chains, plan, act):
-    """Run all chains in lockstep. Returns one result dict per chain."""
+def run(chains, plan, act, dagger_rows=None):
+    """Run all chains in lockstep. Returns one result dict per chain.
+
+    If dagger_rows is a list, every state the executor visits is appended to it, labeled with the
+    expert's action (DAgger: recovery data from the executor's own mistakes).
+    """
     states = []
     for c in chains:
         env, obs = episode_env(TASK, c["seed"])
@@ -71,8 +75,17 @@ def run(chains, plan, act):
         active = [s for s in states if not s["done"]]
         if not active:
             break
-        classes = act([with_target(s["obs"], s["target"]) for s in active])
+        inputs = [with_target(s["obs"], s["target"]) for s in active]
+        classes = act(inputs)
         exec_steps += len(active)
+        if dagger_rows is not None:
+            for s, o in zip(active, inputs):
+                a = expert_action(o)
+                dagger_rows.append({"episode_id": f"chaindagger_{s['chain']['seed']}", "task": TASK,
+                                    "step": len(s["path"]) - 1, "prompt": obs_to_prompt(o, TASK),
+                                    "action_class": continuous_to_class(a),
+                                    "action_continuous": [round(float(v), 4) for v in a],
+                                    "subtask": "move to the goal", "obs": [round(float(v), 4) for v in o]})
         for s, cls in zip(active, classes):
             s["obs"], *_ = s["env"].unwrapped.step(class_to_continuous(cls))
             s["path"].append(s["obs"][0:3].tolist())
@@ -108,6 +121,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--out", default="outputs/chain_rollouts")
+    parser.add_argument("--dagger-out", default=None, help="write expert-labeled visited states (reach-v3.jsonl) here")
     args = parser.parse_args()
 
     loaded = None
@@ -120,7 +134,14 @@ def main():
 
     chains = load_chains(args.test, args.limit)
     t0 = time.time()
-    results, timing = run(chains, plan, act)
+    dagger_rows = [] if args.dagger_out else None
+    results, timing = run(chains, plan, act, dagger_rows)
+    if args.dagger_out:
+        os.makedirs(args.dagger_out, exist_ok=True)
+        with open(os.path.join(args.dagger_out, f"{TASK}.jsonl"), "w") as f:
+            for row in dagger_rows:
+                f.write(json.dumps(row) + "\n")
+        print(f"Wrote {len(dagger_rows)} DAgger rows to {args.dagger_out}")
     by_len = {}
     for r in results:
         by_len.setdefault(r["length"], []).append(r["success"])

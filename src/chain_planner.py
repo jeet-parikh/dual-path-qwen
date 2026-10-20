@@ -63,7 +63,7 @@ def chain_messages(chain, n_done, hand):
     n = len(chain["steps"])
     return [{"role": "user", "content": (
         "You are the planner for a robot arm. Positions are (x, y) in meters on a table: larger x is "
-        "further right, larger y is farther from the robot.\n"
+        "further right, larger y is farther from the robot's base (the front edge of the table).\n"
         f"Markers: {markers}.\n"
         f"The hand started at ({START[0]:.2f}, {START[1]:.2f}) and is now at ({hand[0]:.2f}, {hand[1]:.2f}).\n"
         f"Instruction: {chain['instruction']}\n"

@@ -6,10 +6,10 @@ After that, go back to where you started." Each step resolves to one place (a ma
 "start"), but only by reasoning over the scene and the earlier steps:
 
   direct     the red marker
-  extreme    the leftmost / rightmost / closest-to-the-robot / farthest-from-the-robot marker
-  nearest    the marker closest to the red one          (excluding red itself)
+  extreme    the leftmost / rightmost / frontmost / backmost marker (front = nearest the robot's base)
+  nearest    the marker closest to the red one (not red itself)
   farthest   the marker farthest from the red one
-  relative   the marker closest to the one you just touched   (depends on the previous step)
+  relative   the marker closest to the one you just touched (not that one itself)
   back       back to where you started / back to the first marker you touched
   cond       if the red marker is left of the blue one, the green marker; otherwise the yellow one
 
@@ -45,13 +45,13 @@ FAMILIES = ["direct", "extreme", "nearest", "farthest", "relative", "back", "con
 EXTREMES = {  # phrase -> (axis, sign): pick the marker with the largest sign * coordinate
     "the leftmost marker": (0, -1),
     "the rightmost marker": (0, 1),
-    "the marker closest to the robot": (1, -1),
-    "the marker farthest from the robot": (1, 1),
+    "the frontmost marker (nearest to the robot's base)": (1, -1),
+    "the backmost marker (farthest from the robot's base)": (1, 1),
 }
 COMPARISONS = {  # phrase -> (axis, sign): "a <phrase> b" is true when sign * (a - b) > 0
     "left of": (0, -1),
     "right of": (0, 1),
-    "closer to the robot than": (1, -1),
+    "closer to the robot's base than": (1, -1),
 }
 VERBS = ["go to", "touch", "move to", "visit"]
 CONNECTORS = ["First,", "Then", "Next,", "After that,"]
@@ -116,11 +116,11 @@ def step_text(step):
     if fam == "extreme":
         return step["phrase"]
     if fam == "nearest":
-        return f"the marker closest to the {step['color']} one"
+        return f"the marker closest to the {step['color']} one (not {step['color']} itself)"
     if fam == "farthest":
         return f"the marker farthest from the {step['color']} one"
     if fam == "relative":
-        return "the marker closest to the one you just touched"
+        return "the marker closest to the one you just touched (not that one itself)"
     if fam == "back":
         return "back to where you started" if step["which"] == "start" else "back to the first marker you touched"
     if fam == "cond":
@@ -266,7 +266,7 @@ def main():
     markers = [("red", -0.20, 0.60), ("blue", 0.00, 0.80), ("green", 0.15, 0.55), ("yellow", -0.05, 0.62)]
     h = ["start", "green"]
     assert resolve({"family": "extreme", "phrase": "the leftmost marker"}, markers, h) == "red"
-    assert resolve({"family": "extreme", "phrase": "the marker farthest from the robot"}, markers, h) == "blue"
+    assert resolve({"family": "extreme", "phrase": "the backmost marker (farthest from the robot's base)"}, markers, h) == "blue"
     assert resolve({"family": "nearest", "color": "red"}, markers, h) == "yellow"
     assert resolve({"family": "farthest", "color": "red"}, markers, h) == "green"
     assert resolve({"family": "relative"}, markers, h) == "yellow"
